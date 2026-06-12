@@ -200,6 +200,6 @@ You are free to use, modify, and extend it for learning and academic work.
 
 ---
 
-**Author:** Peter Toss
-**Framework:** Flask  
-**Tooling:** ANTLR4
+**Author:** Peter Toss,
+ **Framework:** Flask, 
+ **Tooling:** ANTLR4
