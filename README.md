@@ -37,7 +37,7 @@ Visitor
 │
 Abstract Syntax Tree (AST)
 │
-(Symbol Table - Planned)
+(Symbol Table)
 
 ---
 
@@ -106,7 +106,7 @@ The Template language supports:
 - Internal CSS
 - Jinja2 constructs (`{{ }}`, `{% %}`)
 
-### 🔧 AST (Planned)
+### 🔧 AST 
 - The Template AST has **not been implemented yet**
 - Will follow a similar design to the Flask AST
 - Separate node hierarchy for:
@@ -139,7 +139,7 @@ This is extremely useful for:
 
 ---
 
-## 📦 Symbol Table (Not Finished Yet)
+## 📦 Symbol Table 
 
 A **Symbol Table** was added to support:
 - Variable declarations
@@ -149,7 +149,7 @@ A **Symbol Table** was added to support:
 
 It will be integrated after AST construction for both:
 - Flask code 
-- Template code (Planned)
+- Template code 
 
 ---
 
@@ -200,6 +200,6 @@ You are free to use, modify, and extend it for learning and academic work.
 
 ---
 
-**Author:** Amer Shammout  
+**Author:** Peter Toss
 **Framework:** Flask  
 **Tooling:** ANTLR4
