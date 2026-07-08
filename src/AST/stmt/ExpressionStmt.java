@@ -14,6 +14,8 @@ public class ExpressionStmt extends Statement {
         this.expression = expression;
     }
 
+    public Expression getExpression() { return expression; }
+
     @Override
     public List<ASTNode> getChildren() {
         return List.of(expression);

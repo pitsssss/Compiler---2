@@ -1,46 +1,33 @@
-### IntelliJ IDEA ###
+# === Java build output ===
 out/
-!**/src/main/**/out/
-!**/src/test/**/out/
-.kotlin
+*.class
+*.log
 
-### Eclipse ###
-.apt_generated
-.classpath
-.factorypath
-.project
-.settings
-.springBeans
-.sts4-cache
-bin/
-!**/src/main/**/bin/
-!**/src/test/**/bin/
-
-### NetBeans ###
-/nbproject/private/
-/nbbuild/
-/dist/
-/nbdist/
-/.nb-gradle/
-
-### VS Code ###
-.vscode/
-
-### Mac OS ###
-.DS_Store
-
-# === ANTLR Generated Files ===
+# === ANTLR generated sources (regenerate with scripts/generate-antlr.ps1) ===
 src/antlr/*.tokens
 src/antlr/*.interp
 src/antlr/*.java
-src/antlr/*.class
 gen/
 src/antlr/gen/
-
-# Java build files
-*.class
-*.jar
-*.log
-
-# Keep grammar files only
+# Keep the grammar files themselves
 !src/antlr/*.g4
+
+# === JARs: ignore everything except the required ANTLR runtime in lib/ ===
+*.jar
+!lib/*.jar
+
+# === Python (generated Flask app + local test venvs) ===
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.test-venv/
+scripts/.venv/
+
+# === IDE / OS ===
+.idea/
+.DS_Store
+# Ignore IDE folder but keep the shared VS Code settings needed to run the project
+.vscode/*
+!.vscode/settings.json

@@ -101,9 +101,6 @@ public class JinjaASTVisitor {
     public void visit(ASTNode node) {
         if (node == null) return;
 
-        System.out.println("Visiting: " + node.getClass().getSimpleName());
-
-
         if (node instanceof JinjaBlockStmt block) {
             table.addBlock(block.getName(), block);
             visit(block.getBody());

@@ -25,6 +25,10 @@ public class FunctionDefStmt extends Statement {
         return parameters;
     }
 
+    public Suite getBody() {
+        return body;
+    }
+
 
     @Override
     public List<ASTNode> getChildren() {

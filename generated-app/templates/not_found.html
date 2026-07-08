@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card notfound">
+    <h1>Product Not Found</h1>
+    <p>No product exists with id {{ product_id }}.</p>
+    <a class="btn" href="{{ url_for('list_products') }}">Back to Products</a>
+</div>
+{% endblock %}

@@ -18,6 +18,9 @@ public class JinjaAttrExpr extends JinjaExpr {
         this.attribute = attribute;
     }
 
+    public JinjaExpr getTarget() { return target; }
+    public String getAttribute() { return attribute; }
+
     @Override
     public List<ASTNode> getChildren() {
         return List.of(target);

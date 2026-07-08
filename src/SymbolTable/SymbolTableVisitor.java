@@ -81,33 +81,16 @@ public class SymbolTableVisitor {
     private void visitFromImport(FromImportStmt stmt) {
         log("Visiting FromImport at line " + stmt.getLineNumber());
 
-        try {
-            String stmtStr = stmt.toString();
-
-            if (stmtStr.contains("from") && stmtStr.contains("import")) {
-                String importPart = stmtStr.substring(stmtStr.indexOf("import") + 6).trim();
-                importPart = importPart.replaceAll("[\\(\\)\\[\\]]", "");
-
-                String[] imports = importPart.split(",");
-
-                for (String imp : imports) {
-                    String cleanImp = imp.trim();
-                    if (!cleanImp.isEmpty() && !cleanImp.equals(")") && !cleanImp.equals("\"")) {
-                        String key = cleanImp + "_" + stmt.getLineNumber();
-
-                        if (!processedImports.contains(key)) {
-                            symbolTable.addImport(cleanImp, stmt.getLineNumber());
-                            processedImports.add(key);
-                            log("Added import: " + cleanImp + " at line " + stmt.getLineNumber());
-                        } else {
-                            log("Import already processed: " + cleanImp);
-                        }
-                    }
-                }
+        // Use the typed AST fields directly (no string parsing).
+        List<String> names = stmt.getNames();
+        if (names == null) return;
+        for (String name : names) {
+            if (name == null || name.trim().isEmpty()) continue;
+            String key = name + "_" + stmt.getLineNumber();
+            if (processedImports.add(key)) {
+                symbolTable.addImport(name.trim(), stmt.getLineNumber());
+                log("Added import: " + name + " at line " + stmt.getLineNumber());
             }
-
-        } catch (Exception e) {
-            log("Error processing import: " + e.getMessage());
         }
     }
 
@@ -186,16 +169,10 @@ public class SymbolTableVisitor {
     }
 
     private void processDecoratorAttribute(AttributeExpr attr, int lineNumber) {
-        try {
-            String base = extractBaseName(attr);
-            String attribute = extractAttributeFromToString(attr);
-
-            symbolTable.addAttribute(base, attribute, lineNumber);
-            log("Processed decorator: " + base + "." + attribute + " at line " + lineNumber);
-
-        } catch (Exception e) {
-            log("Error processing decorator: " + e.getMessage());
-        }
+        String base = dottedBaseName(attr.getBase());
+        String attribute = attr.getAttribute();
+        symbolTable.addAttribute(base, attribute, lineNumber);
+        log("Processed decorator: " + base + "." + attribute + " at line " + lineNumber);
     }
 
     private void visitExpression(ASTNode expr) {
@@ -221,12 +198,9 @@ public class SymbolTableVisitor {
     }
 
     private void visitIdentifierExpression(IdentifierExpr expr) {
-        String name = expr.getName();
-
-        if (!symbolTable.isDeclared(name)) {
-            System.err.println("Warning: Undefined identifier '" + name +
-                    "' at line " + expr.getLineNumber());
-        }
+        // Name-resolution checks are performed by the semantic analyzer, which
+        // reports through the diagnostics system. The symbol-table pass only
+        // builds the inventory and does not print warnings itself.
     }
 
     private void visitCallExpression(CallExpr call) {
@@ -255,60 +229,23 @@ public class SymbolTableVisitor {
     }
 
     private void visitAttributeExpression(AttributeExpr attr) {
-        try {
-            String base = extractBaseName(attr);
-            String attribute = extractAttributeFromToString(attr);
+        String base = dottedBaseName(attr.getBase());
+        String attribute = attr.getAttribute();
 
-            symbolTable.addAttribute(base, attribute, attr.getLineNumber());
-            log("Added attribute: " + base + "." + attribute + " at line " + attr.getLineNumber());
-
-            List<ASTNode> children = attr.getChildren();
-            if (!children.isEmpty()) {
-                visitExpression(children.get(0));
-            }
-
-        } catch (Exception e) {
-            log("Error processing attribute: " + e.getMessage());
-        }
+        symbolTable.addAttribute(base, attribute, attr.getLineNumber());
+        log("Recorded attribute use: " + base + "." + attribute + " at line " + attr.getLineNumber());
+        // The base is traversed by the generic child loop in visitExpression().
     }
 
-    private String extractAttributeFromToString(AttributeExpr attr) {
-        try {
-            String toString = attr.toString();
-            if (toString.contains(".")) {
-                int dotIndex = toString.indexOf(".");
-                int endIndex = toString.indexOf(")", dotIndex);
-                if (endIndex == -1) endIndex = toString.length();
-
-                String attrPart = toString.substring(dotIndex + 1, endIndex).trim();
-                attrPart = attrPart.replaceAll("[\\)\\(\\s\"]", "");
-                return attrPart;
-            }
-        } catch (Exception e) {
-            log("Failed to extract attribute: " + e.getMessage());
+    /** Builds a dotted name from an expression using AST accessors (no strings). */
+    private String dottedBaseName(Expression expr) {
+        if (expr instanceof IdentifierExpr id) {
+            return id.getName();
         }
-        return "attr";
-    }
-
-    private String extractBaseName(AttributeExpr attr) {
-        try {
-            List<ASTNode> children = attr.getChildren();
-            if (!children.isEmpty()) {
-                ASTNode baseNode = children.get(0);
-                if (baseNode instanceof IdentifierExpr) {
-                    return ((IdentifierExpr) baseNode).getName();
-                } else if (baseNode instanceof AttributeExpr) {
-                    // للسلسلة مثل request.args
-                    AttributeExpr nestedAttr = (AttributeExpr) baseNode;
-                    String nestedBase = extractBaseName(nestedAttr);
-                    String nestedAttrName = extractAttributeFromToString(nestedAttr);
-                    return nestedBase + "." + nestedAttrName;
-                }
-            }
-        } catch (Exception e) {
-            log("Failed to extract base: " + e.getMessage());
+        if (expr instanceof AttributeExpr a) {
+            return dottedBaseName(a.getBase()) + "." + a.getAttribute();
         }
-        return "unknown";
+        return "<expr>";
     }
 
     private void visitBinaryExpression(BinaryExpr expr) {

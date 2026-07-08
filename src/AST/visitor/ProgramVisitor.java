@@ -24,7 +24,6 @@ public class ProgramVisitor extends FlaskParserBaseVisitor<Program> {
                 statements.add((Statement) node);
             }
         }
-        System.out.println("Number of statements = " + statements.size());
 
         return new Program(statements, ctx.start.getLine());
     }

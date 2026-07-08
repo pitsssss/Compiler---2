@@ -14,6 +14,9 @@ public class LambdaExpr extends Expression {
         this.body = body;
     }
 
+    public List<String> getParams() { return params; }
+    public Expression getBody() { return body; }
+
     @Override
     public List<ASTNode> getChildren() {
         return List.of(body);

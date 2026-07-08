@@ -13,6 +13,8 @@ public class Decorator extends ASTNode {
         this.expr = expr;
     }
 
+    public Expression getExpr() { return expr; }
+
     @Override
     public List<ASTNode> getChildren() {
         return List.of(expr);

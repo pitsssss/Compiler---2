@@ -1,205 +1,147 @@
-# Flask Compiler using ANTLR4
+# Flask/Jinja2 Compiler (ANTLR4 + Java)
 
-This project is an **educational compiler / interpreter front-end** for the **Flask web framework**, built using **ANTLR4**.  
-It focuses on parsing, building Abstract Syntax Trees (AST), and preparing the foundation for semantic analysis and symbol tables for both **Flask (Python)** code and **Template files (HTML, Internal CSS, Jinja2)**.
+A compiler front-end **and** code generator built with **ANTLR4** and plain
+**Java**. It reads a Flask (Python) application plus its Jinja2/HTML/CSS
+templates, performs full analysis (lexing, parsing, AST construction, symbol
+table, and multi-stage semantic analysis), and then **generates a complete,
+runnable Flask web application**.
 
-The project is designed for **Compiler Construction / Software Engineering courses** and demonstrates real-world language processing on a modern web framework.
+The pipeline is verified end to end: the generated app is exercised by an
+automated pytest suite using the Flask test client.
 
----
+## Description
 
-## ✨ Project Overview
+The compiler handles two language domains, each with its own lexer, parser, and
+AST:
 
-The compiler is divided into **two main language domains**:
+1. **Flask (Python subset)** — imports, assignments, functions, decorators
+   (`@app.route`), control flow, calls with keyword args, and list/set/dict
+   literals.
+2. **Templates** — HTML, internal CSS, and Jinja2 (`{{ }}` / `{% %}`).
 
-1. **Flask (Python-based backend)**
-2. **Template Language (HTML + Internal CSS + Jinja2)**
+It then **links** the two: routes, `render_template` context, `url_for`
+endpoints, and the product data/schema are extracted from the Python AST and
+validated against the templates, then passed into the generated app.
 
-Each domain has:
-- Its own **Lexer**
-- Its own **Parser**
-- Its own **Parse Tree**
-- Its own **AST (Abstract Syntax Tree)**
+```
+Input files → Lexer → Parser → Parse Tree → AST → Symbol Table
+            → Semantic Analysis (Python + Template + Cross-language)
+            → Generator → generated-app/
+```
 
----
+## Requirements
 
-## 🧠 Architecture
+- **JDK 21** (`java`/`javac` on PATH)
+- **ANTLR 4.13.2** — already bundled at `lib/antlr-4.13.2-complete.jar`
+- **Python 3.x** — optional, only to run the generated app / its tests
+- **Windows + PowerShell** for the provided scripts (the raw `javac`/`java`
+  commands work on any OS)
 
-Source Code
-│
-▼
-ANTLR4 Lexer
-│
-ANTLR4 Parser
-│
-Parse Tree
-│
-Visitor
-│
-Abstract Syntax Tree (AST)
-│
-(Symbol Table)
+## Build
 
----
+```powershell
+./scripts/generate-antlr.ps1   # regenerate ANTLR sources from the .g4 grammars
+./scripts/build.ps1            # compile everything into out/
+```
 
+Raw commands (no scripts):
 
----
+```powershell
+$javaFiles = Get-ChildItem .\src -Recurse -Filter *.java | ForEach-Object { $_.FullName }
+javac -encoding UTF-8 -cp ".\lib\antlr-4.13.2-complete.jar" -d .\out $javaFiles
+```
 
-## 🐍 Flask (Python) Compiler Part
+## Run
 
-### ✔ Lexer & Parser
-- **FlaskLexer**
-- **FlaskParser**
+```powershell
+# Demo (uses examples/demo) and generate the Flask app:
+./scripts/run.ps1
 
-Generated using **ANTLR4** from a Python-like grammar tailored for Flask applications.
+# Explicit inputs:
+./scripts/run.ps1 --flask examples/demo/app.py --template examples/demo/templates --generate
+```
 
-### ✔ AST Structure
+Raw command:
 
-All AST nodes inherit from a common base class:
+```powershell
+java -cp ".\out;.\lib\antlr-4.13.2-complete.jar" Main --flask examples/demo/app.py --template examples/demo/templates --generate
+```
 
-- **ASTNode** (Abstract)
+### CLI options
 
-Core abstract categories:
-- **Expression**
-- **Literal**
-- **Statement**
-- **Suite**
+| Option | Effect |
+|--------|--------|
+| `--flask <path>` | Flask Python source file |
+| `--template <path>` | template file or folder |
+| `--output <path>` | output directory (default `generated-app`) |
+| `--generate` | generate the Flask app |
+| `--analyze-only` | analyse without generating |
+| `--print-python-ast` | print the Python AST |
+| `--print-template-ast` | print the template AST(s) |
+| `--print-symbol-table` | print the symbol table |
+| `--help` | usage |
 
-All of the above:
-- Are **abstract classes**
-- Extend **ASTNode**
+Exit codes: `0` success, `2` analysis errors, `3` I/O error.
 
-#### Example Expression Hierarchy
-- `BinaryExpr`
-- `CompareExpr`
-- `UnaryExpr`
-- `CallExpr`
-- ...
+## Test
 
-Each concrete expression:
-- Extends `Expression`
-- Follows a clean and extensible inheritance pattern
+```powershell
+./scripts/test.ps1            # Java suite (30 tests) + generated-app pytest (8 tests)
+./scripts/test-flask-app.ps1  # just the generated app's pytest (creates a venv)
+```
 
----
+## Run the generated Flask app
 
-### ✔ Visitors
+```powershell
+cd generated-app
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -r requirements.txt
+.\.venv\Scripts\python app.py
+# open http://127.0.0.1:5000
+```
 
-Two visitors are implemented for the Flask side:
+## Project structure
 
-- **FlaskVisitor**
-  - Traverses the ANTLR Parse Tree
-  - Builds the corresponding AST
+```
+src/antlr/         four .g4 grammars + ANTLR-generated Java
+src/AST/           Python AST nodes + template AST (html/css/jinja) + printers
+src/AST/visitor/   parse tree -> Python AST
+src/SymbolTable/   FlaskSymbolTable + SymbolTableVisitor
+src/model/         AppModel + AppModelBuilder (the Python<->template bridge)
+src/semantic/      Python / Template / Cross-language analyzers
+src/diagnostics/   structured errors + reporter + ANTLR error listener
+src/generator/     FlaskAppGenerator
+src/pipeline/      CompilerPipeline (orchestrator)
+src/Main.java      CLI
+src/Tests/         Java test suite + input fixtures
+scripts/           generate-antlr / build / run / test / clean (PowerShell)
+examples/demo/     demo Flask app + templates
+generated-app/     generated output
+docs/              full documentation (01–10)
+```
 
-- **ProgramVisitor**
-  - Handles higher-level program structures
-  - Entry point for AST construction
+## Supported semantic errors
 
----
+Distinguished as **lexical / syntax / semantic / warning**, each with a code,
+message, file, line, column, and a fix suggestion.
 
-## 🌐 Template Compiler Part
+- **Python/Flask**: undefined variable (PY001), duplicate function (PY002),
+  duplicate parameter (PY003), `return` outside function (PY004),
+  `break`/`continue` outside loop (PY005), call to undefined function (PY006),
+  duplicate route path (PY007).
+- **Templates**: duplicate block (TPL001), misplaced `extends` (TPL002), missing
+  include (TPL003), unknown filter (TPL004), duplicate HTML id (TPL005), unknown
+  Jinja global (TPL006).
+- **Cross-language**: missing render target (X001), undefined `url_for` endpoint
+  (X002), context variable not passed (X003), details template missing
+  `product` (X004), product key not in schema (X005).
 
-### ✔ Lexer & Parser
-- **TemplateLexer**
-- **TemplateParser**
+## Documentation
 
-The Template language supports:
-- HTML
-- Internal CSS
-- Jinja2 constructs (`{{ }}`, `{% %}`)
+See `docs/`: audit (01), traceability (02), architecture (03), grammar (04),
+AST (05), symbol table & semantics (06), code generation (07), testing (08),
+changelog (09), final report (10).
 
-### 🔧 AST 
-- The Template AST has **not been implemented yet**
-- Will follow a similar design to the Flask AST
-- Separate node hierarchy for:
-  - HTML elements
-  - Attributes
-  - CSS rules
-  - Jinja2 expressions and statements
+## License
 
----
-
-## 🌳 AST Visualization (Graphviz)
-
-To visualize AST structures, the project includes:
-
-### ✔ ASTGraphvizPrinter
-
-- Generates a file called `ast.dot`
-- Represents the AST in **Graphviz DOT format**
-
-### ✔ How to View the AST
-1. Run the compiler to generate `ast.dot`
-2. Copy the file contents
-3. Paste it into the following website: https://dreampuf.github.io/GraphvizOnline/?engine=dot
-4. Instantly view the AST as a visual tree
-
-This is extremely useful for:
-- Debugging
-- Understanding AST structure
-- Academic demonstrations
-
----
-
-## 📦 Symbol Table 
-
-A **Symbol Table** was added to support:
-- Variable declarations
-- Function definitions
-- Scope handling
-- Semantic analysis
-
-It will be integrated after AST construction for both:
-- Flask code 
-- Template code 
-
----
-
-## 🛠 Technologies Used
-
-- **Java**
-- **ANTLR4**
-- **Graphviz**
-- **Flask (as target language)**
-- **HTML / CSS / Jinja2**
-
----
-
-## 🎯 Project Goals
-
-- Demonstrate real-world compiler design
-- Apply ANTLR4 to a modern framework (Flask)
-- Build clean and extensible ASTs
-- Prepare groundwork for semantic analysis
-- Provide visual AST inspection via Graphviz
-
----
-
-## 🚀 Future Work
-
-- [ ] Implement Template AST
-- [ ] Build Symbol Table
-- [ ] Add Semantic Analysis
-- [ ] Error handling & diagnostics
-- [ ] Code generation or interpretation phase
-
----
-
-## 📚 Academic Context
-
-This project is suitable for:
-- Compiler Design courses
-- Programming Languages courses
-- Software Engineering projects
-- Advanced ANTLR4 practice
-
----
-
-## 📄 License
-
-This project is intended for **educational purposes**.  
-You are free to use, modify, and extend it for learning and academic work.
-
----
-
-**Author:** Peter Toss,
- **Framework:** Flask, 
- **Tooling:** ANTLR4
+Educational use.

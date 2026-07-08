@@ -14,6 +14,8 @@ public class ReturnStmt extends Statement {
         this.value = value;
     }
 
+    public Expression getValue() { return value; }
+
     @Override
     public List<ASTNode> getChildren() {
         return List.of(value);

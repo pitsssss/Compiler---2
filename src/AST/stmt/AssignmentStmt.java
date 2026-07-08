@@ -16,6 +16,7 @@ public class AssignmentStmt extends Statement {
         this.value = value;
     }
 
+    public Expression getTarget() { return target; }
     public Expression getValue() { return value; }
 
     @Override

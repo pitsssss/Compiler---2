@@ -14,6 +14,8 @@ public class ListLiteralExpr extends Expression {
         this.elements = elements;
     }
 
+    public List<Expression> getElements() { return elements; }
+
     @Override
     public List<ASTNode> getChildren() {
         return List.copyOf(elements);

@@ -86,9 +86,15 @@ NEWLINE
    {
        String newLine = getText().replaceAll("[^\r\n]+", "");
        String spaces = getText().replaceAll("[\r\n]+", "");
-       emit(commonToken(NEWLINE, newLine));
 
-       if (opened == 0) {
+       // Inside (), [] or {} a newline is insignificant (implicit line joining),
+       // so it is skipped entirely and no INDENT/DEDENT is produced. This lets
+       // list/dict/call literals span multiple lines.
+       if (opened > 0) {
+           skip();
+       } else {
+           emit(commonToken(NEWLINE, newLine));
+
            int indent = getIndentationCount(spaces);
            int previous = indents.isEmpty() ? 0 : indents.peek();
 

@@ -228,7 +228,12 @@ trailer
     ;
 
 arguments
-    : expr (COMMA expr)*
+    : argument (COMMA argument)*
+    ;
+
+argument
+    : IDENTIFIER ASSIGN expr                     # KeywordArg
+    | expr                                        # PositionalArg
     ;
 
 // ======================================================
@@ -250,16 +255,29 @@ literal
     | string_literal                             # StringLiteral
     | boolean_literal                            # BooleanLiteral
     | NONE                                       # NoneLiteral
+    | dict_literal                               # DictLiteral
     | set_literal                                # SetLiteral
     | list_literal                               # listLiteral
     ;
 
-set_literal
-    : LBRACE expr COMMA expr (COMMA expr)* COMMA? RBRACE
+// Dictionary: {} or { k: v, ... }. Listed before set_literal so the presence
+// of ':' disambiguates a dict from a set.
+dict_literal
+    : LBRACE (dict_entry (COMMA dict_entry)* COMMA?)? RBRACE
     ;
 
+dict_entry
+    : expr COLON expr
+    ;
+
+// Set: { a, b, ... } (at least one element; {} is parsed as an empty dict).
+set_literal
+    : LBRACE expr (COMMA expr)* COMMA? RBRACE
+    ;
+
+// List: [] , [x] , [a, b, ...]
 list_literal
-    : LBRACK expr COMMA expr (COMMA expr)* COMMA? RBRACK
+    : LBRACK (expr (COMMA expr)* COMMA?)? RBRACK
     ;
 
 number_literal

@@ -17,6 +17,9 @@ public class DecoratedStmt extends Statement {
         this.target = target;
     }
 
+    public List<Decorator> getDecorators() { return decorators; }
+    public Statement getTarget() { return target; }
+
     @Override
     public List<ASTNode> getChildren() {
         List<ASTNode> list = new ArrayList<>(decorators);

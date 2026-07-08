@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<html>
+<body>
+  {% block content %}First{% endblock %}
+  {% block content %}Duplicate{% endblock %}
+  <p>{{ name | bogusfilter }}</p>
+</body>
+</html>

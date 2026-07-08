@@ -216,7 +216,9 @@ public class FlaskVisitor extends FlaskParserBaseVisitor<ASTNode> {
 
         Suite body = (Suite) visit(ctx.suite());
 
-        return new FunctionDefStmt(name, params, body, ctx.start.getLine());
+        FunctionDefStmt fn = new FunctionDefStmt(name, params, body, ctx.start.getLine());
+        fn.setColumn(ctx.IDENTIFIER().getSymbol().getCharPositionInLine());
+        return fn;
     }
 
 
@@ -439,14 +441,19 @@ public class FlaskVisitor extends FlaskParserBaseVisitor<ASTNode> {
             if (t instanceof FlaskParser.CallTrailerContext call) {
 
                 List<Expression> args = new ArrayList<>();
+                java.util.LinkedHashMap<String, Expression> kwargs = new java.util.LinkedHashMap<>();
 
                 if (call.arguments() != null) {
-                    for (FlaskParser.ExprContext e : call.arguments().expr()) {
-                        args.add((Expression) visit(e));
+                    for (FlaskParser.ArgumentContext a : call.arguments().argument()) {
+                        if (a instanceof FlaskParser.KeywordArgContext kw) {
+                            kwargs.put(kw.IDENTIFIER().getText(), (Expression) visit(kw.expr()));
+                        } else if (a instanceof FlaskParser.PositionalArgContext pos) {
+                            args.add((Expression) visit(pos.expr()));
+                        }
                     }
                 }
 
-                base = new CallExpr(base, args, line);
+                base = new CallExpr(base, args, kwargs, line);
             }
             else if (t instanceof FlaskParser.AttrTrailerContext attr) {
 
@@ -475,7 +482,8 @@ public class FlaskVisitor extends FlaskParserBaseVisitor<ASTNode> {
 
     @Override
     public ASTNode visitIdAtom(FlaskParser.IdAtomContext ctx) {
-        return new IdentifierExpr(ctx.IDENTIFIER().getText(), ctx.start.getLine());
+        return new IdentifierExpr(ctx.IDENTIFIER().getText(), ctx.start.getLine())
+                .setColumn(ctx.start.getCharPositionInLine());
     }
 
     @Override
@@ -547,5 +555,19 @@ public class FlaskVisitor extends FlaskParserBaseVisitor<ASTNode> {
         }
 
         return new ListLiteralExpr(elems, ctx.start.getLine());
+    }
+
+    @Override
+    public ASTNode visitDict_literal(FlaskParser.Dict_literalContext ctx)
+    {
+        List<Expression> keys = new ArrayList<>();
+        List<Expression> values = new ArrayList<>();
+
+        for (FlaskParser.Dict_entryContext entry : ctx.dict_entry()) {
+            keys.add((Expression) visit(entry.expr(0)));
+            values.add((Expression) visit(entry.expr(1)));
+        }
+
+        return new DictLiteralExpr(keys, values, ctx.start.getLine());
     }
 }

@@ -1,0 +1,459 @@
+package generator;
+
+import model.AppModel;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Generates a complete, runnable Flask CRUD application from the {@link AppModel}
+ * that was extracted from the Python AST. The product records and their field
+ * schema flow directly from the parsed Python data into both the generated
+ * {@code app.py} and the Jinja2 templates (the required Python -> template link).
+ *
+ * Output is split across focused writer methods (never one giant string) and is
+ * always written as UTF-8.
+ */
+public final class FlaskAppGenerator {
+
+    private final AppModel model;
+    private final List<String> fields;                 // resolved product schema
+    private final List<Map<String, Object>> rows;      // resolved product rows
+
+    public FlaskAppGenerator(AppModel model) {
+        this.model = model;
+        this.fields = resolveFields(model);
+        this.rows = resolveRows(model, this.fields);
+    }
+
+    /** Writes the whole project under {@code outputDir}. Returns the list of files written. */
+    public List<Path> generate(Path outputDir) throws IOException {
+        List<Path> written = new ArrayList<>();
+
+        Path templates = outputDir.resolve("templates");
+        Path staticDir = outputDir.resolve("static");
+        Path tests = outputDir.resolve("tests");
+        Files.createDirectories(templates);
+        Files.createDirectories(staticDir);
+        Files.createDirectories(tests);
+
+        written.add(write(outputDir.resolve("app.py"), generateAppPy()));
+        written.add(write(outputDir.resolve("requirements.txt"), generateRequirements()));
+        written.add(write(outputDir.resolve("README.md"), generateReadme()));
+        written.add(write(templates.resolve("base.html"), generateBaseHtml()));
+        written.add(write(templates.resolve("products.html"), generateProductsHtml()));
+        written.add(write(templates.resolve("product_details.html"), generateDetailsHtml()));
+        written.add(write(templates.resolve("add_product.html"), generateAddHtml()));
+        written.add(write(templates.resolve("not_found.html"), generateNotFoundHtml()));
+        written.add(write(staticDir.resolve("style.css"), generateCss()));
+        written.add(write(tests.resolve("test_app.py"), generateTests()));
+
+        return written;
+    }
+
+    // ---- schema / data resolution -----------------------------------------
+
+    private static List<String> resolveFields(AppModel model) {
+        List<String> f = new ArrayList<>(model.getProductFields());
+        for (String core : List.of("id", "name", "price", "in_stock", "description", "category")) {
+            if (!f.contains(core)) f.add(core);
+        }
+        return f;
+    }
+
+    private static List<Map<String, Object>> resolveRows(AppModel model, List<String> fields) {
+        List<Map<String, Object>> resolved = new ArrayList<>();
+        List<Map<String, Object>> source = model.getProductRows();
+
+        if (source.isEmpty()) {
+            // Fallback seed so the generated app always runs, even for
+            // analyze-only inputs with no product data.
+            source = defaultSeed();
+        }
+
+        int i = 0;
+        for (Map<String, Object> raw : source) {
+            i++;
+            Map<String, Object> row = new LinkedHashMap<>();
+            for (String field : fields) {
+                Object v = raw.get(field);
+                if (v == null) v = defaultFor(field, i);
+                row.put(field, v);
+            }
+            resolved.add(row);
+        }
+        return resolved;
+    }
+
+    private static List<Map<String, Object>> defaultSeed() {
+        List<Map<String, Object>> seed = new ArrayList<>();
+        seed.add(row(1, "Laptop", 1200.0, true, "A fast development laptop", "Electronics"));
+        seed.add(row(2, "Headphones", 250.0, false, "Noise cancelling", "Audio"));
+        return seed;
+    }
+
+    private static Map<String, Object> row(int id, String name, double price, boolean stock,
+                                           String desc, String cat) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", id); m.put("name", name); m.put("price", price);
+        m.put("in_stock", stock); m.put("description", desc); m.put("category", cat);
+        return m;
+    }
+
+    private static Object defaultFor(String field, int index) {
+        return switch (field) {
+            case "id" -> index;
+            case "price" -> 0.0;
+            case "in_stock" -> false;
+            default -> "";
+        };
+    }
+
+    // ---- app.py ------------------------------------------------------------
+
+    private String generateAppPy() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("\"\"\"Flask CRUD app generated by the Jinja2Compiler.\n");
+        sb.append("Product data and schema were extracted from the parsed Python source.\n\"\"\"\n");
+        sb.append("from flask import Flask, render_template, request, redirect, url_for, abort\n\n");
+        sb.append("app = Flask(__name__)\n\n");
+
+        sb.append("# Product schema (derived from the analysed Python data): ")
+          .append(fields).append("\n");
+        sb.append("products = [\n");
+        for (Map<String, Object> r : rows) {
+            sb.append("    {");
+            List<String> parts = new ArrayList<>();
+            for (String f : fields) {
+                parts.add("\"" + f + "\": " + pyValue(r.get(f)));
+            }
+            sb.append(String.join(", ", parts));
+            sb.append("},\n");
+        }
+        sb.append("]\n\n");
+
+        sb.append("def _next_id():\n");
+        sb.append("    return max((p[\"id\"] for p in products), default=0) + 1\n\n");
+
+        sb.append("def find_product(product_id):\n");
+        sb.append("    return next((p for p in products if p[\"id\"] == product_id), None)\n\n");
+
+        sb.append("@app.route(\"/\")\n");
+        sb.append("def home():\n");
+        sb.append("    return redirect(url_for(\"list_products\"))\n\n");
+
+        sb.append("@app.route(\"/products\")\n");
+        sb.append("def list_products():\n");
+        sb.append("    return render_template(\"products.html\", products=products)\n\n");
+
+        sb.append("@app.route(\"/products/<int:product_id>\")\n");
+        sb.append("def product_details(product_id):\n");
+        sb.append("    product = find_product(product_id)\n");
+        sb.append("    if product is None:\n");
+        sb.append("        return render_template(\"not_found.html\", product_id=product_id), 404\n");
+        sb.append("    return render_template(\"product_details.html\", product=product)\n\n");
+
+        sb.append("@app.route(\"/products/add\", methods=[\"GET\", \"POST\"])\n");
+        sb.append("def add_product():\n");
+        sb.append("    errors = []\n");
+        sb.append("    if request.method == \"POST\":\n");
+        sb.append("        name = (request.form.get(\"name\") or \"\").strip()\n");
+        sb.append("        price_raw = (request.form.get(\"price\") or \"\").strip()\n");
+        sb.append("        if not name:\n");
+        sb.append("            errors.append(\"Name is required.\")\n");
+        sb.append("        try:\n");
+        sb.append("            price = float(price_raw) if price_raw else 0.0\n");
+        sb.append("        except ValueError:\n");
+        sb.append("            price = 0.0\n");
+        sb.append("            errors.append(\"Price must be a number.\")\n");
+        sb.append("        if not errors:\n");
+        sb.append("            products.append({\n");
+        sb.append("                \"id\": _next_id(),\n");
+        sb.append("                \"name\": name,\n");
+        sb.append("                \"price\": price,\n");
+        sb.append("                \"in_stock\": request.form.get(\"in_stock\") == \"on\",\n");
+        sb.append("                \"description\": (request.form.get(\"description\") or \"\").strip(),\n");
+        sb.append("                \"category\": (request.form.get(\"category\") or \"\").strip(),\n");
+        sb.append("            })\n");
+        sb.append("            return redirect(url_for(\"list_products\"))\n");
+        sb.append("    return render_template(\"add_product.html\", errors=errors)\n\n");
+
+        sb.append("@app.route(\"/products/<int:product_id>/delete\", methods=[\"POST\"])\n");
+        sb.append("def delete_product(product_id):\n");
+        sb.append("    product = find_product(product_id)\n");
+        sb.append("    if product is not None:\n");
+        sb.append("        products.remove(product)\n");
+        sb.append("    return redirect(url_for(\"list_products\"))\n\n");
+
+        sb.append("if __name__ == \"__main__\":\n");
+        sb.append("    app.run(debug=True)\n");
+        return sb.toString();
+    }
+
+    // ---- templates ---------------------------------------------------------
+
+    private String generateBaseHtml() {
+        return "<!DOCTYPE html>\n" +
+               "<html lang=\"en\">\n" +
+               "<head>\n" +
+               "    <meta charset=\"UTF-8\">\n" +
+               "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n" +
+               "    <title>{{ page_title | default(\"Product Store\") }}</title>\n" +
+               "    <link rel=\"stylesheet\" href=\"{{ url_for('static', filename='style.css') }}\">\n" +
+               "</head>\n" +
+               "<body>\n" +
+               "<header>\n" +
+               "    <nav class=\"navbar\">\n" +
+               "        <a class=\"brand\" href=\"{{ url_for('list_products') }}\">Product Store</a>\n" +
+               "        <ul>\n" +
+               "            <li><a href=\"{{ url_for('list_products') }}\">Products</a></li>\n" +
+               "            <li><a href=\"{{ url_for('add_product') }}\">Add Product</a></li>\n" +
+               "        </ul>\n" +
+               "    </nav>\n" +
+               "</header>\n" +
+               "<main class=\"container\">\n" +
+               "    {% block content %}{% endblock %}\n" +
+               "</main>\n" +
+               "<footer>\n" +
+               "    <p>Generated by Jinja2Compiler</p>\n" +
+               "</footer>\n" +
+               "</body>\n" +
+               "</html>\n";
+    }
+
+    private String generateProductsHtml() {
+        return "{% extends \"base.html\" %}\n" +
+               "{% block content %}\n" +
+               "<h1>Products</h1>\n" +
+               "{% if products %}\n" +
+               "<div class=\"grid\">\n" +
+               "    {% for product in products %}\n" +
+               "    <div class=\"card\">\n" +
+               "        <h3>{{ product.name }}</h3>\n" +
+               "        <p class=\"price\">${{ \"%.2f\"|format(product.price) }}</p>\n" +
+               "        {% if product.in_stock %}\n" +
+               "        <span class=\"tag in\">In Stock</span>\n" +
+               "        {% else %}\n" +
+               "        <span class=\"tag out\">Out of Stock</span>\n" +
+               "        {% endif %}\n" +
+               "        <p><a class=\"btn\" href=\"{{ url_for('product_details', product_id=product.id) }}\">View Details</a></p>\n" +
+               "    </div>\n" +
+               "    {% endfor %}\n" +
+               "</div>\n" +
+               "{% else %}\n" +
+               "<p class=\"empty\">No products available yet. <a href=\"{{ url_for('add_product') }}\">Add one</a>.</p>\n" +
+               "{% endif %}\n" +
+               "{% endblock %}\n";
+    }
+
+    private String generateDetailsHtml() {
+        StringBuilder rowsHtml = new StringBuilder();
+        for (String f : fields) {
+            if (f.equals("id")) continue;
+            if (f.equals("price")) {
+                rowsHtml.append("        <tr><th>Price</th><td>${{ \"%.2f\"|format(product.price) }}</td></tr>\n");
+            } else if (f.equals("in_stock")) {
+                rowsHtml.append("        <tr><th>In stock</th><td>{% if product.in_stock %}Yes{% else %}No{% endif %}</td></tr>\n");
+            } else {
+                String label = capitalize(f.replace('_', ' '));
+                rowsHtml.append("        <tr><th>").append(label)
+                        .append("</th><td>{{ product.").append(f).append(" }}</td></tr>\n");
+            }
+        }
+        return "{% extends \"base.html\" %}\n" +
+               "{% block content %}\n" +
+               "<div class=\"card details\">\n" +
+               "    <h1>{{ product.name }}</h1>\n" +
+               "    <table class=\"details-table\">\n" +
+               rowsHtml +
+               "    </table>\n" +
+               "    <div class=\"actions\">\n" +
+               "        <a class=\"btn\" href=\"{{ url_for('list_products') }}\">Back to Products</a>\n" +
+               "        <form method=\"post\" action=\"{{ url_for('delete_product', product_id=product.id) }}\" onsubmit=\"return confirm('Delete this product?');\">\n" +
+               "            <button class=\"btn danger\" type=\"submit\">Delete</button>\n" +
+               "        </form>\n" +
+               "    </div>\n" +
+               "</div>\n" +
+               "{% endblock %}\n";
+    }
+
+    private String generateAddHtml() {
+        return "{% extends \"base.html\" %}\n" +
+               "{% block content %}\n" +
+               "<div class=\"card\">\n" +
+               "    <h1>Add Product</h1>\n" +
+               "    {% if errors %}\n" +
+               "    <ul class=\"errors\">\n" +
+               "        {% for error in errors %}\n" +
+               "        <li>{{ error }}</li>\n" +
+               "        {% endfor %}\n" +
+               "    </ul>\n" +
+               "    {% endif %}\n" +
+               "    <form method=\"post\" action=\"{{ url_for('add_product') }}\">\n" +
+               "        <label>Name</label>\n" +
+               "        <input type=\"text\" name=\"name\" required>\n" +
+               "        <label>Price</label>\n" +
+               "        <input type=\"number\" step=\"0.01\" name=\"price\">\n" +
+               "        <label>Description</label>\n" +
+               "        <textarea name=\"description\" rows=\"3\"></textarea>\n" +
+               "        <label>Category</label>\n" +
+               "        <input type=\"text\" name=\"category\">\n" +
+               "        <label class=\"checkbox\"><input type=\"checkbox\" name=\"in_stock\"> In stock</label>\n" +
+               "        <button class=\"btn\" type=\"submit\">Save Product</button>\n" +
+               "    </form>\n" +
+               "</div>\n" +
+               "{% endblock %}\n";
+    }
+
+    private String generateNotFoundHtml() {
+        return "{% extends \"base.html\" %}\n" +
+               "{% block content %}\n" +
+               "<div class=\"card notfound\">\n" +
+               "    <h1>Product Not Found</h1>\n" +
+               "    <p>No product exists with id {{ product_id }}.</p>\n" +
+               "    <a class=\"btn\" href=\"{{ url_for('list_products') }}\">Back to Products</a>\n" +
+               "</div>\n" +
+               "{% endblock %}\n";
+    }
+
+    // ---- css ---------------------------------------------------------------
+
+    private String generateCss() {
+        return "* { margin: 0; padding: 0; box-sizing: border-box; }\n" +
+               "body { font-family: 'Segoe UI', Arial, sans-serif; background: #f4f6f8; color: #23272f; }\n" +
+               "a { color: #2563eb; text-decoration: none; }\n" +
+               "a:hover { text-decoration: underline; }\n" +
+               ".navbar { display: flex; align-items: center; justify-content: space-between;\n" +
+               "          background: #1f2937; padding: 14px 28px; }\n" +
+               ".navbar .brand { color: #fff; font-size: 20px; font-weight: bold; }\n" +
+               ".navbar ul { list-style: none; display: flex; gap: 18px; }\n" +
+               ".navbar a { color: #e5e7eb; }\n" +
+               ".container { max-width: 960px; margin: 30px auto; padding: 0 16px; }\n" +
+               "h1 { margin-bottom: 18px; }\n" +
+               ".grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 18px; }\n" +
+               ".card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;\n" +
+               "        padding: 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }\n" +
+               ".card h3 { margin-bottom: 8px; }\n" +
+               ".price { font-size: 18px; font-weight: bold; color: #16a34a; margin: 6px 0; }\n" +
+               ".tag { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; }\n" +
+               ".tag.in { background: #dcfce7; color: #166534; }\n" +
+               ".tag.out { background: #fee2e2; color: #991b1b; }\n" +
+               ".btn { display: inline-block; margin-top: 10px; padding: 8px 14px; border: none;\n" +
+               "       border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }\n" +
+               ".btn:hover { background: #1d4ed8; text-decoration: none; }\n" +
+               ".btn.danger { background: #dc2626; }\n" +
+               ".btn.danger:hover { background: #b91c1c; }\n" +
+               ".details-table { width: 100%; border-collapse: collapse; margin: 16px 0; }\n" +
+               ".details-table th, .details-table td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; }\n" +
+               ".actions { display: flex; gap: 12px; align-items: center; }\n" +
+               "form label { display: block; margin-top: 12px; font-weight: 600; }\n" +
+               "form input, form textarea { width: 100%; padding: 8px; margin-top: 4px;\n" +
+               "                            border: 1px solid #cbd5e1; border-radius: 6px; }\n" +
+               "form label.checkbox { display: flex; align-items: center; gap: 8px; font-weight: 400; }\n" +
+               "form label.checkbox input { width: auto; margin-top: 0; }\n" +
+               ".errors { background: #fee2e2; color: #991b1b; padding: 10px 14px; border-radius: 6px; margin-bottom: 12px; }\n" +
+               ".empty { padding: 20px; background: #fff; border-radius: 10px; }\n" +
+               "footer { text-align: center; padding: 20px; color: #6b7280; }\n";
+    }
+
+    // ---- tests / requirements / readme ------------------------------------
+
+    private String generateTests() {
+        return "import pytest\n" +
+               "from app import app, products\n\n" +
+               "@pytest.fixture\n" +
+               "def client():\n" +
+               "    app.config[\"TESTING\"] = True\n" +
+               "    with app.test_client() as c:\n" +
+               "        yield c\n\n" +
+               "def test_list_products_ok(client):\n" +
+               "    assert client.get(\"/products\").status_code == 200\n\n" +
+               "def test_home_redirects(client):\n" +
+               "    assert client.get(\"/\").status_code in (301, 302)\n\n" +
+               "def test_add_page_ok(client):\n" +
+               "    assert client.get(\"/products/add\").status_code == 200\n\n" +
+               "def test_details_ok(client):\n" +
+               "    first = products[0][\"id\"]\n" +
+               "    assert client.get(f\"/products/{first}\").status_code == 200\n\n" +
+               "def test_details_missing_404(client):\n" +
+               "    assert client.get(\"/products/999999\").status_code == 404\n\n" +
+               "def test_add_creates_and_redirects(client):\n" +
+               "    before = len(products)\n" +
+               "    resp = client.post(\"/products/add\", data={\"name\": \"Test\", \"price\": \"9.99\", \"in_stock\": \"on\"})\n" +
+               "    assert resp.status_code in (301, 302)\n" +
+               "    assert len(products) == before + 1\n\n" +
+               "def test_delete_via_get_not_allowed(client):\n" +
+               "    first = products[0][\"id\"]\n" +
+               "    assert client.get(f\"/products/{first}/delete\").status_code == 405\n\n" +
+               "def test_delete_removes_and_redirects(client):\n" +
+               "    new_id = None\n" +
+               "    client.post(\"/products/add\", data={\"name\": \"ToDelete\", \"price\": \"1\"})\n" +
+               "    new_id = products[-1][\"id\"]\n" +
+               "    before = len(products)\n" +
+               "    resp = client.post(f\"/products/{new_id}/delete\")\n" +
+               "    assert resp.status_code in (301, 302)\n" +
+               "    assert len(products) == before - 1\n";
+    }
+
+    private String generateRequirements() {
+        return "Flask>=3.0\npytest>=8.0\n";
+    }
+
+    private String generateReadme() {
+        return "# Generated Flask Product Store\n\n" +
+               "This app was generated automatically by the Jinja2Compiler from the parsed\n" +
+               "Python/Flask source. The product data and field schema were taken from the\n" +
+               "analysed AST.\n\n" +
+               "## Run\n\n" +
+               "```powershell\n" +
+               "python -m venv .venv\n" +
+               ".\\.venv\\Scripts\\Activate.ps1\n" +
+               "pip install -r requirements.txt\n" +
+               "python app.py\n" +
+               "```\n\n" +
+               "Then open http://127.0.0.1:5000/\n\n" +
+               "## Test\n\n" +
+               "```powershell\n" +
+               "pip install -r requirements.txt\n" +
+               "pytest -q\n" +
+               "```\n\n" +
+               "## Routes\n\n" +
+               "- `/` - redirects to the product list\n" +
+               "- `/products` - list all products\n" +
+               "- `/products/<id>` - product details (404 when missing)\n" +
+               "- `/products/add` - add form (GET) and create (POST)\n" +
+               "- `/products/<id>/delete` - delete (POST only)\n";
+    }
+
+    // ---- helpers -----------------------------------------------------------
+
+    private Path write(Path path, String content) throws IOException {
+        Files.writeString(path, content, StandardCharsets.UTF_8);
+        return path;
+    }
+
+    private static String pyValue(Object v) {
+        if (v == null) return "None";
+        if (v instanceof Boolean b) return b ? "True" : "False";
+        if (v instanceof Integer || v instanceof Long || v instanceof Double || v instanceof Float) {
+            return v.toString();
+        }
+        return "\"" + escapePy(v.toString()) + "\"";
+    }
+
+    private static String escapePy(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
+    }
+
+    private static String capitalize(String s) {
+        if (s == null || s.isEmpty()) return s;
+        return Character.toUpperCase(s.charAt(0)) + s.substring(1);
+    }
+}

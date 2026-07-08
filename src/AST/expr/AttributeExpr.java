@@ -13,6 +13,9 @@ public class AttributeExpr extends Expression {
         this.attribute = attribute;
     }
 
+    public Expression getBase() { return base; }
+    public String getAttribute() { return attribute; }
+
     @Override
     public List<ASTNode> getChildren() {
         return List.of(base);

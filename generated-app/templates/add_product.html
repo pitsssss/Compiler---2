@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+    <h1>Add Product</h1>
+    {% if errors %}
+    <ul class="errors">
+        {% for error in errors %}
+        <li>{{ error }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+    <form method="post" action="{{ url_for('add_product') }}">
+        <label>Name</label>
+        <input type="text" name="name" required>
+        <label>Price</label>
+        <input type="number" step="0.01" name="price">
+        <label>Description</label>
+        <textarea name="description" rows="3"></textarea>
+        <label>Category</label>
+        <input type="text" name="category">
+        <label class="checkbox"><input type="checkbox" name="in_stock"> In stock</label>
+        <button class="btn" type="submit">Save Product</button>
+    </form>
+</div>
+{% endblock %}

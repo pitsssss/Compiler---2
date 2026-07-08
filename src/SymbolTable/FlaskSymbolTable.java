@@ -141,6 +141,10 @@ public class FlaskSymbolTable {
     private final Map<String, List<Symbol>> symbolsByType = new HashMap<>();
     private final Map<String, Symbol> builtins = new HashMap<>();
 
+    // Uses (not declarations) tracked separately so they never cause duplicates.
+    private final List<Symbol> attributeUsages = new ArrayList<>();
+    private final List<Symbol> builtinUsages = new ArrayList<>();
+
     private int scopeCounter = 0;
     private final Set<String> symbolNames = new HashSet<>();
 
@@ -176,9 +180,15 @@ public class FlaskSymbolTable {
     }
 
     private void addBuiltin(String name, SymbolType type, String dataType) {
+        // Registered for name-resolution only; NOT added to the scope symbol
+        // inventory so that Flask/Python built-ins never masquerade as user
+        // declarations or trigger duplicate warnings.
         Symbol symbol = new Symbol(name, type, dataType, 0);
         builtins.put(name, symbol);
-        addToCategory(symbol);
+    }
+
+    public boolean isBuiltin(String name) {
+        return builtins.containsKey(cleanSymbolName(name));
     }
 
     // ===== Scope Management =====
@@ -230,14 +240,16 @@ public class FlaskSymbolTable {
         return name;
     }
 
-    public void addSymbol(Symbol symbol) {
+    /** Adds a real declaration to the current scope.
+     *  @return true if added, false if a same-scope duplicate blocked it. */
+    public boolean addSymbol(Symbol symbol) {
         if (symbol == null || symbol.getName() == null) {
-            return;
+            return false;
         }
 
         String cleanedName = cleanSymbolName(symbol.getName());
         if (cleanedName.isEmpty()) {
-            return;
+            return false;
         }
 
         // إنشاء رمز جديد بالاسم النظيف
@@ -253,19 +265,20 @@ public class FlaskSymbolTable {
 
         Scope current = getCurrentScope();
         if (current != null) {
-            // فقط تحذير إذا كان موجوداً في نفس الـ scope
+            // A genuine re-declaration in the SAME scope: keep the first symbol
+            // and record the collision for the semantic analyzer. We do NOT print
+            // here — diagnostics are the single source of truth for user output.
             if (current.contains(cleanedName)) {
-                System.err.println("Warning: Symbol '" + cleanedName +
-                        "' already declared in scope " + current.getName() +
-                        " at line " + symbol.getLineNumber());
-                return;
+                return false;
             }
 
             current.addSymbol(cleanedSymbol);
             symbolNames.add(cleanedName);
             allSymbols.add(cleanedSymbol);
             addToCategory(cleanedSymbol);
+            return true;
         }
+        return false;
     }
 
     private void addToCategory(Symbol symbol) {
@@ -297,8 +310,19 @@ public class FlaskSymbolTable {
         addSymbol(new Symbol(name, SymbolType.PARAMETER, lineNumber, "parameter", getCurrentScopeName()));
     }
 
+    // Attribute accesses (e.g. app.route, request.args) are USES, not declarations.
+    // They are recorded in a dedicated list and never placed in a scope, so
+    // repeated access can never look like a duplicate declaration.
     public void addAttribute(String base, String attribute, int lineNumber) {
-        addSymbol(new Symbol(attribute, SymbolType.ATTRIBUTE, base, lineNumber, null, "attribute", getCurrentScopeName()));
+        String key = base + "." + attribute;
+        for (Symbol s : attributeUsages) {
+            if (s.getName().equals(attribute) && s.getDataType().equals(base)
+                    && s.getLineNumber() == lineNumber) {
+                return; // already recorded this exact usage
+            }
+        }
+        attributeUsages.add(new Symbol(attribute, SymbolType.ATTRIBUTE, base, lineNumber,
+                null, "attribute", getCurrentScopeName()));
     }
 
     // هذه الدالة المحدثة والمصححة
@@ -313,9 +337,16 @@ public class FlaskSymbolTable {
         ));
     }
 
+    // Built-in calls are USES, not declarations: recorded once per name.
     public void addBuiltinFunction(String name, int lineNumber) {
-        addSymbol(new Symbol(name, SymbolType.BUILTIN, lineNumber, "builtin", "global"));
+        for (Symbol s : builtinUsages) {
+            if (s.getName().equals(name)) return;
+        }
+        builtinUsages.add(new Symbol(name, SymbolType.BUILTIN, lineNumber, "builtin", "global"));
     }
+
+    public List<Symbol> getAttributeUsages() { return attributeUsages; }
+    public List<Symbol> getBuiltinUsages() { return builtinUsages; }
 
     // ===== Lookup Methods =====
     public Symbol lookup(String name) {
@@ -371,21 +402,19 @@ public class FlaskSymbolTable {
         // Local Variables (grouped by scope)
         printLocalVariables();
 
-        // Built-in Functions
-        List<Symbol> builtinFuncs = getSymbolsByType(SymbolType.BUILTIN);
-        if (!builtinFuncs.isEmpty()) {
-            System.out.println("\nBuilt-in Functions:");
-            for (Symbol b : builtinFuncs) {
+        // Built-in Functions actually used (uses, not declarations)
+        if (!builtinUsages.isEmpty()) {
+            System.out.println("\nBuilt-in Functions (used):");
+            for (Symbol b : builtinUsages) {
                 System.out.println("  - " + b.getName() + "()");
             }
         }
 
-        // Attributes
-        List<Symbol> attributes = getSymbolsByType(SymbolType.ATTRIBUTE);
-        if (!attributes.isEmpty()) {
-            System.out.println("\nAttributes:");
-            for (Symbol a : attributes) {
-                System.out.println("  - " + a.getDataType() + " ." + a.getName() +
+        // Attribute accesses (uses, not declarations)
+        if (!attributeUsages.isEmpty()) {
+            System.out.println("\nAttribute Accesses (uses, not declarations):");
+            for (Symbol a : attributeUsages) {
+                System.out.println("  - " + a.getDataType() + "." + a.getName() +
                         " [line " + a.getLineNumber() + "]");
             }
         }
@@ -470,6 +499,8 @@ public class FlaskSymbolTable {
         allSymbols.clear();
         symbolsByType.clear();
         symbolNames.clear();
+        attributeUsages.clear();
+        builtinUsages.clear();
         scopeCounter = 0;
         enterScope("global", Scope.ScopeType.GLOBAL);
         initializeBuiltins();

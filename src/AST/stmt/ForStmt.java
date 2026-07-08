@@ -21,6 +21,10 @@ public class ForStmt extends Statement {
         this.body = body;
     }
 
+    public IdentifierExpr getIterator() { return iterator; }
+    public Expression getIterable() { return iterable; }
+    public Suite getBody() { return body; }
+
     @Override
     public List<ASTNode> getChildren() {
         return List.of(iterator, iterable, body);

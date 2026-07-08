@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ page_title | default("Product Store") }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header>
+    <nav class="navbar">
+        <a class="brand" href="{{ url_for('list_products') }}">Product Store</a>
+        <ul>
+            <li><a href="{{ url_for('list_products') }}">Products</a></li>
+            <li><a href="{{ url_for('add_product') }}">Add Product</a></li>
+        </ul>
+    </nav>
+</header>
+<main class="container">
+    {% block content %}{% endblock %}
+</main>
+<footer>
+    <p>Demo template for Jinja2Compiler</p>
+</footer>
+</body>
+</html>
