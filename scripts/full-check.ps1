@@ -212,14 +212,17 @@ try {
 
     Write-Step "10/10 - Checking for hard-coded user paths"
 
+    $hardCodedUserPathPattern = "C:" + '\' + "Users" + '\'
+
     $filesToCheck = Get-ChildItem `
         .\src, .\scripts `
         -Recurse `
         -File `
-        -Include *.java, *.ps1, *.json
+        -Include *.java, *.ps1, *.json |
+        Where-Object { $_.Name -ne 'full-check.ps1' }
 
     $absolutePaths = $filesToCheck |
-        Select-String -Pattern 'C:\\Users\\' -SimpleMatch
+        Select-String -Pattern $hardCodedUserPathPattern -SimpleMatch
 
     if ($absolutePaths) {
         Write-Host "[WARNING] Hard-coded Windows user paths were found:"
@@ -232,7 +235,7 @@ try {
         throw "Hard-coded user paths must be removed."
     }
 
-    Write-Host "[PASS] No hard-coded C:\Users\ paths were found in source or scripts."
+    Write-Host "[PASS] No hard-coded user paths were found in source or scripts."
 
     $duration = (Get-Date) - $startTime
 
