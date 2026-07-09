@@ -15,6 +15,8 @@ import java.nio.file.Path;
  *     --print-python-ast     Print the Python/Flask AST
  *     --print-template-ast   Print each template AST
  *     --print-symbol-table   Print the Flask symbol table
+ *     --export-ast           Export python/template/data-flow DOT diagrams
+ *     --ast-output <path>    Directory for exported DOT files (default: docs/diagrams/generated)
  *     --generate             Generate the Flask application
  *     --analyze-only         Analyze only; do not generate
  *     --help                 Show this help
@@ -47,6 +49,8 @@ public class Main {
                     case "--print-python-ast" -> cfg.printPythonAst = true;
                     case "--print-template-ast" -> cfg.printTemplateAst = true;
                     case "--print-symbol-table" -> cfg.printSymbolTable = true;
+                    case "--export-ast" -> cfg.exportAst = true;
+                    case "--ast-output" -> cfg.astOutputDir = Path.of(requireValue(args, ++i, a));
                     case "--generate" -> cfg.generate = true;
                     case "--analyze-only" -> cfg.analyzeOnly = true;
                     default -> {
@@ -98,6 +102,8 @@ public class Main {
               --print-python-ast     Print the Python/Flask AST
               --print-template-ast   Print each template AST
               --print-symbol-table   Print the Flask symbol table
+              --export-ast           Export python-ast.dot, template-ast.dot, cross-language-data-flow.dot
+              --ast-output <path>    Output directory for DOT exports (default: docs/diagrams/generated)
               --generate             Generate the Flask application
               --analyze-only         Analyze only; do not generate
               --help                 Show this help

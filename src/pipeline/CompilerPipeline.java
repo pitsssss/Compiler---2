@@ -1,6 +1,7 @@
 package pipeline;
 
 import AST.ASTNode;
+import AST.CrossLanguageDataFlowDot;
 import AST.ASTGraphvizPrinter;
 import AST.ASTPrinter;
 import AST.Program;
@@ -51,7 +52,12 @@ public final class CompilerPipeline {
         public boolean printSymbolTable;
         public boolean generate;
         public boolean analyzeOnly;
+        /** Legacy single-file Python AST export (project root). */
         public Path astDot = Path.of("ast.dot");
+        /** Export python/template/data-flow DOT files when true. */
+        public boolean exportAst;
+        /** Output directory for exported DOT diagrams. */
+        public Path astOutputDir = Path.of("docs", "diagrams", "generated");
     }
 
     private final DiagnosticReporter reporter = new DiagnosticReporter();
@@ -91,6 +97,9 @@ public final class CompilerPipeline {
 
             if (cfg.generate && !cfg.analyzeOnly && model != null) {
                 generate(cfg);
+            }
+            if (cfg.exportAst) {
+                exportAstDiagrams(cfg);
             }
             return 0;
         } catch (IOException e) {
@@ -137,11 +146,16 @@ public final class CompilerPipeline {
         // Semantic analysis (Python)
         new PythonSemanticAnalyzer(reporter, file).analyze(pythonProgram, model);
 
-        // AST diagram from the real AST
+        // AST diagram from the real Python AST (legacy root file + optional export dir)
         try {
             ASTGraphvizPrinter.print(pythonProgram, cfg.astDot.toString());
+            if (cfg.exportAst) {
+                Path outDir = cfg.astOutputDir;
+                Files.createDirectories(outDir);
+                ASTGraphvizPrinter.print(pythonProgram, outDir.resolve("python-ast.dot").toString());
+            }
         } catch (IOException e) {
-            System.err.println("Could not write ast.dot: " + e.getMessage());
+            System.err.println("Could not write Python AST DOT: " + e.getMessage());
         }
 
         if (cfg.printPythonAst) {
@@ -181,6 +195,34 @@ public final class CompilerPipeline {
         // Third pass: inheritance graph (extends / blocks).
         new TemplateSemanticAnalyzer(reporter, "templates", knownNames)
                 .analyzeInheritance(templateAsts);
+
+        if (cfg.exportAst && !templateAsts.isEmpty()) {
+            try {
+                Path outDir = cfg.astOutputDir;
+                Files.createDirectories(outDir);
+                ASTGraphvizPrinter.printTemplateForest(
+                        templateAsts, outDir.resolve("template-ast.dot").toString());
+            } catch (IOException e) {
+                System.err.println("Could not write template AST DOT: " + e.getMessage());
+            }
+        }
+    }
+
+    private void exportAstDiagrams(Config cfg) throws IOException {
+        Path outDir = cfg.astOutputDir;
+        Files.createDirectories(outDir);
+        if (pythonProgram != null) {
+            ASTGraphvizPrinter.print(pythonProgram, outDir.resolve("python-ast.dot").toString());
+        }
+        if (!templateAsts.isEmpty()) {
+            ASTGraphvizPrinter.printTemplateForest(
+                    templateAsts, outDir.resolve("template-ast.dot").toString());
+        }
+        CrossLanguageDataFlowDot.write(
+                outDir.resolve("cross-language-data-flow.dot"),
+                model,
+                templateAsts.size());
+        System.out.println("Exported AST diagrams to: " + outDir);
     }
 
     private ASTNode parseTemplate(Path f) throws IOException {

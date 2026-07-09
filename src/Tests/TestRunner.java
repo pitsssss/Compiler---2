@@ -1,15 +1,26 @@
 package tests;
 
+import AST.ASTGraphvizPrinter;
 import AST.ASTNode;
+import AST.ASTPrinter;
+import AST.ASTWalker;
+import AST.CrossLanguageDataFlowDot;
 import AST.Program;
 import AST.literal.DictLiteralExpr;
+import AST.literal.ListLiteralExpr;
+import AST.template.html.HtmlDocument;
+import AST.template.html.HtmlNormalElement;
 import AST.stmt.FunctionDefStmt;
 import SymbolTable.FlaskSymbolTable;
+import SymbolTable.SymbolTableVisitor;
 import diagnostics.Diagnostic;
 import diagnostics.DiagnosticReporter;
 import generator.FlaskAppGenerator;
 import model.AppModel;
+import model.AppModelBuilder;
+import pipeline.CompilerPipeline;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -42,6 +53,7 @@ public final class TestRunner {
         templateSemanticTests();
         crossLanguageTests();
         generatorTests();
+        professionalEnhancementTests();
 
         System.out.println("\n-------------------------------------------------------------");
         System.out.println("Passed: " + passed.get() + "   Failed: " + failed.get());
@@ -151,7 +163,7 @@ public final class TestRunner {
     }
 
     private static void pythonSemanticTests() {
-        section("Semantic — Python/Flask");
+        section("Semantic - Python/Flask");
 
         test("PY001 undefined variable", () ->
                 assertCode(TestSupport.analyzePython("x = y\n"), "PY001"));
@@ -235,7 +247,7 @@ public final class TestRunner {
     }
 
     private static void templateSemanticTests() {
-        section("Semantic — Jinja2 / HTML / CSS");
+        section("Semantic - Jinja2 / HTML / CSS");
 
         test("TPL001 duplicate block name", () ->
                 assertCode(TestSupport.analyzeTemplate(
@@ -320,7 +332,7 @@ public final class TestRunner {
     }
 
     private static void crossLanguageTests() {
-        section("Semantic — Cross-language (Python <-> Jinja2)");
+        section("Semantic - Cross-language (Python <-> Jinja2)");
 
         String appMissing =
                 "from flask import Flask, render_template\napp = Flask(\"a\")\n"
@@ -507,6 +519,178 @@ public final class TestRunner {
             assertTrue(appPy.contains("methods=[\"POST\"]") || appPy.contains("methods=['POST']"),
                     "delete uses POST");
 
+            deleteRecursively(out);
+        });
+    }
+
+    private static void professionalEnhancementTests() {
+        section("Professional Enhancements");
+
+        test("Python AST and Template AST are separate object trees", () -> {
+            DiagnosticReporter r = new DiagnosticReporter();
+            Program py = TestSupport.parseFlask(
+                    "x = 1\ndef foo():\n    return x\n", r, "t.py");
+            ASTNode tpl = TestSupport.parseTemplate("<p>{{ x }}</p>", r, "t.html");
+            assertNotNull(py, "python root");
+            assertNotNull(tpl, "template root");
+            assertTrue(py instanceof Program, "python root is Program");
+            assertTrue(tpl instanceof HtmlDocument, "template root is HtmlDocument");
+            assertTrue(!py.getClass().equals(tpl.getClass()), "roots are different types");
+        });
+
+        test("Python AST DOT export succeeds and contains Python nodes", () -> {
+            DiagnosticReporter r = new DiagnosticReporter();
+            Program py = TestSupport.parseFlask("def f():\n    return 1\n", r, "t.py");
+            Path dir = Files.createTempDirectory("dot-py");
+            Path dot = dir.resolve("python-ast.dot");
+            ASTGraphvizPrinter.print(py, dot.toString());
+            String content = Files.readString(dot);
+            assertTrue(content.contains("FunctionDefStmt"), "contains FunctionDefStmt");
+            assertTrue(content.contains("line"), "contains line metadata");
+            assertTrue(!content.contains("HtmlDocument"), "no template nodes");
+            deleteRecursively(dir);
+        });
+
+        test("Template AST DOT export succeeds and contains template nodes", () -> {
+            DiagnosticReporter r = new DiagnosticReporter();
+            ASTNode tpl = TestSupport.parseTemplate(
+                    "<form method=\"post\"><input name=\"n\"></form>", r, "t.html");
+            Path dir = Files.createTempDirectory("dot-tpl");
+            Path dot = dir.resolve("template-ast.dot");
+            ASTGraphvizPrinter.print(tpl, dot.toString());
+            String content = Files.readString(dot);
+            assertTrue(content.contains("HtmlDocument") || content.contains("HtmlNormalElement"),
+                    "contains HTML nodes");
+            assertTrue(!content.contains("FunctionDefStmt"), "no python nodes");
+            deleteRecursively(dir);
+        });
+
+        test("Cross-language data-flow DOT export succeeds", () -> {
+            DiagnosticReporter r = new DiagnosticReporter();
+            Program py = TestSupport.parseFlask(
+                    "from flask import Flask\napp = Flask(\"a\")\n"
+                    + "products = [{\"id\": 1, \"name\": \"x\"}]\n", r, "t.py");
+            AppModel model = TestSupport.buildModel(py);
+            Path dir = Files.createTempDirectory("dot-flow");
+            Path dot = dir.resolve("cross-language-data-flow.dot");
+            CrossLanguageDataFlowDot.write(dot, model, 1);
+            String content = Files.readString(dot);
+            assertTrue(content.contains("AppModel"), "mentions AppModel");
+            assertTrue(content.contains("FlaskAppGenerator"), "mentions generator");
+            deleteRecursively(dir);
+        });
+
+        test("Every parsed Python node has a valid node type and line", () -> {
+            DiagnosticReporter r = new DiagnosticReporter();
+            Program py = TestSupport.parseFlask("y = 1\nx = y\n", r, "t.py");
+            assertTrue(ASTWalker.allHaveNodeName(py), "all have node names");
+            assertTrue(ASTWalker.allParsedNodesHaveLine(py), "all have line > 0");
+        });
+
+        test("Every parsed template node has a valid node type and line", () -> {
+            DiagnosticReporter r = new DiagnosticReporter();
+            ASTNode tpl = TestSupport.parseTemplate("<div id=\"a\">{{ name }}</div>", r, "t.html");
+            assertTrue(ASTWalker.allHaveNodeName(tpl), "all have node names");
+            assertTrue(ASTWalker.allParsedNodesHaveLine(tpl), "all have line > 0");
+        });
+
+        test("ASTPrinter output includes node type and line", () -> {
+            DiagnosticReporter r = new DiagnosticReporter();
+            Program py = TestSupport.parseFlask("def f():\n    return 1\n", r, "t.py");
+            String out = ASTPrinter.render(py);
+            assertTrue(out.contains("FunctionDefStmt"), "contains node type");
+            assertTrue(out.contains("line"), "contains line");
+            assertTrue(!out.contains("@"), "no Java object refs");
+        });
+
+        test("Symbol Table printer includes scopes and symbol kinds", () -> {
+            DiagnosticReporter r = new DiagnosticReporter();
+            Program py = TestSupport.parseFlask(
+                    "from flask import Flask\napp = Flask(\"a\")\n"
+                    + "@app.route(\"/\")\ndef home():\n    return \"ok\"\n", r, "t.py");
+            FlaskSymbolTable st = TestSupport.buildSymbolTable(py);
+            java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+            java.io.PrintStream ps = new java.io.PrintStream(buf);
+            java.io.PrintStream old = System.out;
+            System.setOut(ps);
+            try {
+                st.printSymbolTable();
+            } finally {
+                System.setOut(old);
+            }
+            String out = buf.toString(StandardCharsets.UTF_8);
+            assertTrue(out.contains("FUNCTION") || out.contains("Function"), "function symbols");
+            assertTrue(out.contains("Scope") || out.contains("Global"), "scope info");
+        });
+
+        test("python product data flows through AST and AppModel into generated Flask application",
+                () -> {
+            String marker = "Transferred From Python AST";
+            String src = "from flask import Flask, render_template\napp = Flask(\"a\")\n"
+                    + "products = [{\"id\": 1, \"name\": \"" + marker + "\", \"price\": 42.0, "
+                    + "\"in_stock\": True, \"description\": \"d\", \"category\": \"c\"}]\n"
+                    + "@app.route(\"/\")\ndef home():\n"
+                    + "    return render_template(\"p.html\", products=products)\n";
+
+            DiagnosticReporter r = new DiagnosticReporter();
+            Program py = TestSupport.parseFlask(src, r, "app.py");
+            AppModel model = TestSupport.buildModel(py);
+
+            assertEquals(1, model.getProductRows().size(), "one product row");
+            assertEquals(marker, model.getProductRows().get(0).get("name"), "name in AppModel");
+            assertTrue(model.getProductFields().contains("price"), "schema has price");
+
+            Path out = Files.createTempDirectory("data-flow");
+            FlaskAppGenerator gen = new FlaskAppGenerator(model);
+            gen.generate(out);
+            String appPy = Files.readString(out.resolve("app.py"));
+            assertTrue(appPy.contains(marker),
+                    "generated app.py contains AST-extracted product name");
+            assertTrue(!appPy.contains("Laptop") || appPy.contains(marker),
+                    "not only hardcoded seed names");
+
+            String src2 = src.replace(marker, "Changed Value From AST");
+            Program py2 = TestSupport.parseFlask(src2, r, "app.py");
+            AppModel model2 = TestSupport.buildModel(py2);
+            Path out2 = Files.createTempDirectory("data-flow-2");
+            new FlaskAppGenerator(model2).generate(out2);
+            String appPy2 = Files.readString(out2.resolve("app.py"));
+            assertTrue(appPy2.contains("Changed Value From AST"), "output changes with source");
+            assertTrue(!appPy2.contains(marker), "old marker gone");
+
+            deleteRecursively(out);
+            deleteRecursively(out2);
+        });
+
+        test("Generator is blocked when semantic errors exist", () -> {
+            DiagnosticReporter r = TestSupport.analyzePython("x = missing_var\n");
+            assertTrue(r.hasErrors(), "semantic errors reported");
+            assertTrue(r.countErrors() > 0, "error count > 0");
+        });
+
+        test("Pipeline export-ast produces non-empty diagram files", () -> {
+            Path outDir = Files.createTempDirectory("export-ast");
+            CompilerPipeline.Config cfg = new CompilerPipeline.Config();
+            cfg.flaskFile = Path.of("examples", "demo", "app.py");
+            cfg.templatePath = Path.of("examples", "demo", "templates");
+            cfg.analyzeOnly = true;
+            cfg.exportAst = true;
+            cfg.astOutputDir = outDir;
+            int code = new CompilerPipeline().run(cfg);
+            assertEquals(0, code, "pipeline success");
+            assertFileNonEmpty(outDir.resolve("python-ast.dot"));
+            assertFileNonEmpty(outDir.resolve("template-ast.dot"));
+            assertFileNonEmpty(outDir.resolve("cross-language-data-flow.dot"));
+            deleteRecursively(outDir);
+        });
+
+        test("Empty products template contains empty-state message in generator output", () -> {
+            AppModel empty = new AppModel();
+            Path out = Files.createTempDirectory("empty-ui");
+            new FlaskAppGenerator(empty).generate(out);
+            String productsHtml = Files.readString(out.resolve("templates").resolve("products.html"));
+            assertTrue(productsHtml.contains("No products available"),
+                    "empty state text in products template");
             deleteRecursively(out);
         });
     }

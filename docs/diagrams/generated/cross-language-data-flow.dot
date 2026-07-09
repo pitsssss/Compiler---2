@@ -1,0 +1,41 @@
+digraph CrossLanguageDataFlow {
+  rankdir=LR;
+  node [shape=box, fontname="Arial"];
+
+  py_src [label="Flask Source\n(.py)"];
+  tpl_src [label="Template Sources\n(.html)"];
+
+  py_parse [label="FlaskLexer\nFlaskParser"];
+  tpl_parse [label="TemplateLexer\nTemplateParser"];
+
+  py_ast [label="Python AST\nProgram"];
+  tpl_ast [label="Template AST\nHtmlDocument + Jinja + CSS\n(4 files)"];
+
+  st [label="SymbolTableVisitor\nFlaskSymbolTable"];
+  amb [label="AppModelBuilder"];
+  am [label="AppModel\nproducts=3\nroutes=4\nrender_calls=3"];
+
+  py_sem [label="PythonSemanticAnalyzer\nPY001-PY011"];
+  tpl_sem [label="TemplateSemanticAnalyzer\nTPL001-TPL010"];
+  cross [label="CrossLanguageSemanticAnalyzer\nX001-X011"];
+
+  gen [label="FlaskAppGenerator"];
+  out [label="generated-app/\napp.py + templates + static"];
+
+  py_src -> py_parse -> py_ast;
+  tpl_src -> tpl_parse -> tpl_ast;
+
+  py_ast -> st;
+  py_ast -> amb -> am;
+  py_ast -> py_sem;
+
+  tpl_ast -> tpl_sem;
+
+  am -> cross;
+  tpl_ast -> cross;
+
+  am -> gen;
+  gen -> out;
+
+  tpl_ast -> gen [style=dashed label="template scaffold"];
+}

@@ -29,6 +29,13 @@ def test_add_creates_and_redirects(client):
     assert resp.status_code in (301, 302)
     assert len(products) == before + 1
 
+def test_add_validation_empty_name(client):
+    before = len(products)
+    resp = client.post("/products/add", data={"name": "", "price": "1"})
+    assert resp.status_code == 200
+    assert b"Name is required" in resp.data
+    assert len(products) == before
+
 def test_delete_via_get_not_allowed(client):
     first = products[0]["id"]
     assert client.get(f"/products/{first}/delete").status_code == 405

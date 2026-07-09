@@ -42,12 +42,12 @@ function Invoke-ProjectScript {
 }
 
 try {
-    Write-Step "1/10 - Cleaning the project"
+    Write-Step "1/12 - Cleaning the project"
 
     Invoke-ProjectScript `
         -ScriptPath ".\scripts\clean.ps1"
 
-    Write-Step "2/10 - Generating ANTLR sources"
+    Write-Step "2/12 - Generating ANTLR sources"
 
     Invoke-ProjectScript `
         -ScriptPath ".\scripts\generate-antlr.ps1"
@@ -69,7 +69,7 @@ try {
 
     Write-Host "[PASS] Required ANTLR Java files exist."
 
-    Write-Step "3/10 - Building the Java compiler"
+    Write-Step "3/12 - Building the Java compiler"
 
     Invoke-ProjectScript `
         -ScriptPath ".\scripts\build.ps1"
@@ -89,7 +89,7 @@ try {
         throw "Build finished without producing any .class files."
     }
 
-    Write-Step "4/10 - Analyzing the valid demo"
+    Write-Step "4/12 - Analyzing the valid demo"
 
     Invoke-ProjectScript `
         -ScriptPath ".\scripts\run.ps1" `
@@ -101,7 +101,7 @@ try {
             "--analyze-only"
         )
 
-    Write-Step "5/10 - Generating the Flask application"
+    Write-Step "5/12 - Generating the Flask application"
 
     Invoke-ProjectScript `
         -ScriptPath ".\scripts\run.ps1" `
@@ -110,10 +110,13 @@ try {
             ".\examples\demo\app.py",
             "--template",
             ".\examples\demo\templates",
-            "--generate"
+            "--generate",
+            "--export-ast",
+            "--ast-output",
+            ".\docs\diagrams\generated"
         )
 
-    Write-Step "6/10 - Verifying generated Flask files"
+    Write-Step "6/12 - Verifying generated Flask files"
 
     $requiredGeneratedFiles = @(
         ".\generated-app\app.py",
@@ -147,12 +150,12 @@ try {
 
     Write-Host "[PASS] All 10 generated Flask files exist and are non-empty."
 
-    Write-Step "7/10 - Running Java and Flask test suites"
+    Write-Step "7/12 - Running Java and Flask test suites"
 
     Invoke-ProjectScript `
         -ScriptPath ".\scripts\test.ps1"
 
-    Write-Step "8/10 - Testing invalid input"
+    Write-Step "8/12 - Testing invalid input"
 
     $invalidApp = ".\examples\invalid\app.py"
     $invalidTemplates = ".\examples\invalid\templates"
@@ -178,7 +181,7 @@ try {
         throw "Invalid fixtures were not found under examples\invalid."
     }
 
-    Write-Step "9/10 - Verifying AST output"
+    Write-Step "9/12 - Verifying AST output and exported diagrams"
 
     if (-not (Test-Path ".\ast.dot")) {
         throw "ast.dot was not found."
@@ -190,27 +193,87 @@ try {
         throw "ast.dot exists but is empty."
     }
 
-    Write-Host "AST file: $($astFile.FullName)"
-    Write-Host "AST size: $($astFile.Length) bytes"
-    Write-Host "AST modified: $($astFile.LastWriteTime)"
+    Write-Host "Legacy AST file: $($astFile.FullName) ($($astFile.Length) bytes)"
     Write-Host "[PASS] ast.dot exists and is non-empty."
+
+    $diagramDir = ".\docs\diagrams\generated"
+    $requiredDots = @(
+        "python-ast.dot",
+        "template-ast.dot",
+        "cross-language-data-flow.dot"
+    )
+
+    foreach ($dotName in $requiredDots) {
+        $dotPath = Join-Path $diagramDir $dotName
+        if (-not (Test-Path $dotPath)) {
+            throw "Missing exported diagram: $dotPath"
+        }
+        if ((Get-Item $dotPath).Length -eq 0) {
+            throw "Exported diagram is empty: $dotPath"
+        }
+        Write-Host "[PASS] $dotName exists and is non-empty."
+    }
+
+    $pythonDot = Get-Content (Join-Path $diagramDir "python-ast.dot") -Raw
+    $templateDot = Get-Content (Join-Path $diagramDir "template-ast.dot") -Raw
+
+    if ($pythonDot -notmatch "FunctionDefStmt|Program|AssignmentStmt") {
+        throw "python-ast.dot does not appear to contain Python AST nodes."
+    }
+    if ($templateDot -notmatch "HtmlDocument|HtmlNormalElement|Jinja") {
+        throw "template-ast.dot does not appear to contain Template AST nodes."
+    }
+    if ($pythonDot -match "HtmlDocument" -or $templateDot -match "FunctionDefStmt") {
+        throw "Python and Template DOT files appear to contain cross-contaminated nodes."
+    }
 
     $dotCommand = Get-Command dot -ErrorAction SilentlyContinue
 
     if ($null -ne $dotCommand) {
-        & dot -Tsvg ".\ast.dot" -o ".\ast.svg"
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "Graphviz failed to generate ast.svg."
+        foreach ($dotName in $requiredDots) {
+            $svgName = $dotName -replace '\.dot$', '.svg'
+            & dot -Tsvg (Join-Path $diagramDir $dotName) -o (Join-Path $diagramDir $svgName)
+            if ($LASTEXITCODE -ne 0) {
+                throw "Graphviz failed to generate $svgName."
+            }
+            Write-Host "[PASS] Generated $svgName"
         }
-
-        Write-Host "[PASS] AST SVG generated: ast.svg"
     }
     else {
-        Write-Host "[INFO] Graphviz is not installed; ast.dot was verified without creating ast.svg."
+        Write-Host "[INFO] Graphviz is not installed; DOT files verified without SVG export."
+        Write-Host "[INFO] To render: dot -Tsvg docs/diagrams/generated/python-ast.dot -o python-ast.svg"
     }
 
-    Write-Step "10/10 - Checking for hard-coded user paths"
+    Write-Step "10/12 - Verifying documentation and packaging scripts"
+
+    $requiredDocs = @(
+        ".\ENVIRONMENT.md",
+        ".\docs\FINAL_PROFESSIONAL_AUDIT.md",
+        ".\docs\PYTHON_TO_TEMPLATE_DATA_FLOW.md",
+        ".\docs\LEGACY_CODE_AUDIT.md",
+        ".\docs\SUBMISSION_PACKAGING_GUIDE.md",
+        ".\docs\diagrams\ast-class-hierarchy.md",
+        ".\docs\diagrams\compiler-pipeline.md",
+        ".\docs\diagrams\python-template-data-flow.md",
+        ".\docs\diagrams\semantic-analysis-architecture.md"
+    )
+
+    foreach ($doc in $requiredDocs) {
+        if (-not (Test-Path $doc)) {
+            throw "Missing required documentation: $doc"
+        }
+        if ((Get-Item $doc).Length -eq 0) {
+            throw "Documentation file is empty: $doc"
+        }
+        Write-Host "[PASS] Found $doc"
+    }
+
+    if (-not (Test-Path ".\scripts\package-submission.ps1")) {
+        throw "Missing scripts\package-submission.ps1"
+    }
+    Write-Host "[PASS] package-submission.ps1 exists."
+
+    Write-Step "11/12 - Checking for hard-coded user paths"
 
     $hardCodedUserPathPattern = "C:" + '\' + "Users" + '\'
 
@@ -237,9 +300,9 @@ try {
 
     Write-Host "[PASS] No hard-coded user paths were found in source or scripts."
 
-    $duration = (Get-Date) - $startTime
+    Write-Step "12/12 - Summary"
 
-    Write-Host ""
+    $duration = (Get-Date) - $startTime
     Write-Host "============================================================"
     Write-Host "FULL PROJECT CHECK PASSED"
     Write-Host "============================================================"

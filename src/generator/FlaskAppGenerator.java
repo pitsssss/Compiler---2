@@ -388,6 +388,12 @@ public final class FlaskAppGenerator {
                "    resp = client.post(\"/products/add\", data={\"name\": \"Test\", \"price\": \"9.99\", \"in_stock\": \"on\"})\n" +
                "    assert resp.status_code in (301, 302)\n" +
                "    assert len(products) == before + 1\n\n" +
+               "def test_add_validation_empty_name(client):\n" +
+               "    before = len(products)\n" +
+               "    resp = client.post(\"/products/add\", data={\"name\": \"\", \"price\": \"1\"})\n" +
+               "    assert resp.status_code == 200\n" +
+               "    assert b\"Name is required\" in resp.data\n" +
+               "    assert len(products) == before\n\n" +
                "def test_delete_via_get_not_allowed(client):\n" +
                "    first = products[0][\"id\"]\n" +
                "    assert client.get(f\"/products/{first}/delete\").status_code == 405\n\n" +

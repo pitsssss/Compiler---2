@@ -31,11 +31,12 @@ Input files → Lexer → Parser → Parse Tree → AST → Symbol Table
 
 ## Requirements
 
+See **[ENVIRONMENT.md](ENVIRONMENT.md)** for tested tool versions (JDK 21, Python 3.14, ANTLR 4.13.2, etc.).
+
 - **JDK 21** (`java`/`javac` on PATH)
-- **ANTLR 4.13.2** — already bundled at `lib/antlr-4.13.2-complete.jar`
-- **Python 3.x** — optional, only to run the generated app / its tests
-- **Windows + PowerShell** for the provided scripts (the raw `javac`/`java`
-  commands work on any OS)
+- **ANTLR 4.13.2** — bundled at `lib/antlr-4.13.2-complete.jar`
+- **Python 3.x** — for generated Flask app / pytest
+- **Windows + PowerShell** for scripts (raw `javac`/`java` works on any OS)
 
 ## Build
 
@@ -79,6 +80,8 @@ java -cp ".\out;.\lib\antlr-4.13.2-complete.jar" Main --flask examples/demo/app.
 | `--print-python-ast` | print the Python AST |
 | `--print-template-ast` | print the template AST(s) |
 | `--print-symbol-table` | print the symbol table |
+| `--export-ast` | export python/template/data-flow DOT files |
+| `--ast-output <path>` | DOT output dir (default `docs/diagrams/generated`) |
 | `--help` | usage |
 
 Exit codes: `0` success, `2` analysis errors, `3` I/O error.
@@ -86,7 +89,8 @@ Exit codes: `0` success, `2` analysis errors, `3` I/O error.
 ## Test
 
 ```powershell
-./scripts/test.ps1            # Java suite (30 tests) + generated-app pytest (8 tests)
+./scripts/test.ps1            # Java suite (79 tests) + generated-app pytest
+./scripts/full-check.ps1      # end-to-end verification (12 steps)
 ./scripts/test-flask-app.ps1  # just the generated app's pytest (creates a venv)
 ```
 
