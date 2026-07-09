@@ -22,6 +22,10 @@ public abstract class HtmlElement extends HtmlNode {
         return attributes;
     }
 
+    public String getTagName() {
+        return tagName;
+    }
+
     @Override
     public List<ASTNode> getChildren() {
         return new ArrayList<>(attributes);

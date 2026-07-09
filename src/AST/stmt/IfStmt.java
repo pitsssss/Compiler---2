@@ -53,4 +53,10 @@ public class IfStmt extends Statement {
         return "IfStmt (line " + lineNumber + ")";
     }
 
+    public Expression getCondition() { return condition; }
+    public Suite getThenSuite() { return thenSuite; }
+    public List<Expression> getElifConditions() { return elifConditions; }
+    public List<Suite> getElifSuites() { return elifSuites; }
+    public Suite getElseSuite() { return elseSuite; }
+
 }

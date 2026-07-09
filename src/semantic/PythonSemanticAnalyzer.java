@@ -9,6 +9,8 @@ import AST.suite.Suite;
 import diagnostics.DiagnosticKind;
 import diagnostics.DiagnosticReporter;
 import model.AppModel;
+import model.FunctionSignature;
+import model.RouteSignature;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -19,9 +21,7 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Semantic analysis for the Python/Flask AST. Performs its own scoped walk so
- * that scoping, use-before-definition and control-flow rules can be checked,
- * and reports every problem it finds (it does not stop at the first error).
+ * Semantic analysis for the Python/Flask AST.
  *
  * Error catalogue (all reported as {@link DiagnosticKind#SEMANTIC}):
  *   PY001 undefined variable
@@ -31,6 +31,10 @@ import java.util.Set;
  *   PY005 'break'/'continue' outside a loop
  *   PY006 call to an undefined function
  *   PY007 duplicate route path
+ *   PY008 function argument count mismatch
+ *   PY009 Flask route path parameters do not match function parameters
+ *   PY010 local variable used before assignment
+ *   PY011 Flask route has an execution path without return
  */
 public final class PythonSemanticAnalyzer {
 
@@ -38,7 +42,6 @@ public final class PythonSemanticAnalyzer {
             "len", "int", "str", "list", "dict", "bool", "float", "print", "range",
             "abs", "min", "max", "sum", "sorted", "enumerate", "type", "isinstance",
             "super", "object", "map", "filter", "zip", "round", "set", "tuple",
-            // Flask surface
             "Flask", "render_template", "request", "redirect", "url_for", "jsonify",
             "session", "flash", "abort", "make_response", "send_file", "Blueprint",
             "g", "render_template_string"
@@ -46,30 +49,46 @@ public final class PythonSemanticAnalyzer {
 
     private final DiagnosticReporter reporter;
     private final String file;
-    private final Set<String> knownNames = new HashSet<>(); // globals + imports + builtins
+    private final AppModel model;
+    private AppModel activeModel;
+    private final Set<String> knownNames = new HashSet<>();
     private final Deque<Set<String>> scopes = new ArrayDeque<>();
 
     private int functionDepth = 0;
     private int loopDepth = 0;
 
+    /** Locals declared in the current function (params + assignment targets). */
+    private Set<String> functionLocals = Set.of();
+    /** Locals definitely assigned so far in the current function body walk. */
+    private Set<String> assignedLocals = new HashSet<>();
+
     public PythonSemanticAnalyzer(DiagnosticReporter reporter, String file) {
+        this(reporter, file, null);
+    }
+
+    public PythonSemanticAnalyzer(DiagnosticReporter reporter, String file, AppModel model) {
         this.reporter = reporter;
         this.file = file;
+        this.model = model;
     }
 
     public void analyze(Program program, AppModel model) {
         if (program == null) return;
 
         knownNames.addAll(BUILTINS);
-        if (model != null) knownNames.addAll(model.getImports());
+        AppModel m = model != null ? model : this.model;
+        activeModel = m;
+        if (m != null) knownNames.addAll(m.getImports());
 
-        // Global scope: collect every top-level binding first (module names are
-        // resolvable regardless of textual order, matching Python's semantics).
         Set<String> global = new LinkedHashSet<>();
         collectGlobalNames(program, global);
         scopes.push(global);
 
         detectDuplicateTopLevel(program);
+        if (m != null) {
+            checkRouteParameterAlignment(m);
+            checkRouteReturns(m);
+        }
 
         for (ASTNode stmt : program.getChildren()) {
             checkStmt(stmt);
@@ -97,29 +116,28 @@ public final class PythonSemanticAnalyzer {
         }
     }
 
-    /** Names bound within a function body (params handled separately), stopping
-     *  at nested function/class boundaries. */
-    private void collectBoundNames(ASTNode node, Set<String> out) {
+    private void collectAssignmentTargets(ASTNode node, Set<String> out) {
         if (node == null) return;
         if (node instanceof AssignmentStmt asg) {
-            if (asg.getTarget() instanceof IdentifierExpr id) out.add(id.getName());
+            addTargetName(asg.getTarget(), out);
         } else if (node instanceof AssignmentChainStmt chain) {
             for (ASTNode c : chain.getChildren()) {
-                if (c instanceof IdentifierExpr id) out.add(id.getName());
+                if (c instanceof Expression tgt) addTargetName(tgt, out);
             }
         } else if (node instanceof ForStmt fs) {
             out.add(fs.getIterator().getName());
-            collectBoundNames(fs.getBody(), out);
+            collectAssignmentTargets(fs.getBody(), out);
             return;
-        } else if (node instanceof FunctionDefStmt fn) {
-            out.add(fn.getName());
-            return; // do not descend into nested function
-        } else if (node instanceof ClassDefStmt) {
+        } else if (node instanceof FunctionDefStmt || node instanceof ClassDefStmt) {
             return;
         }
         for (ASTNode child : node.getChildren()) {
-            collectBoundNames(child, out);
+            collectAssignmentTargets(child, out);
         }
+    }
+
+    private void addTargetName(Expression target, Set<String> out) {
+        if (target instanceof IdentifierExpr id) out.add(id.getName());
     }
 
     private void detectDuplicateTopLevel(Program program) {
@@ -162,6 +180,61 @@ public final class PythonSemanticAnalyzer {
         return null;
     }
 
+    // ---- route-specific checks (PY009, PY011) -----------------------------
+
+    private void checkRouteParameterAlignment(AppModel m) {
+        for (RouteSignature route : m.getRouteSignatures().values()) {
+            FunctionDefStmt fn = m.getFunctions().get(route.getEndpoint());
+            if (fn == null) continue;
+            List<String> fnParams = fn.getParameters();
+            for (String pathParam : route.getPathParameters()) {
+                if (!fnParams.contains(pathParam)) {
+                    reporter.error(DiagnosticKind.SEMANTIC, "PY009",
+                            "Route '" + route.getPath() + "' expects path parameter '"
+                                    + pathParam + "' but function '" + route.getEndpoint()
+                                    + "()' does not declare it",
+                            file, route.getLine(), -1,
+                            "add parameter '" + pathParam + "' to " + route.getEndpoint());
+                }
+            }
+        }
+    }
+
+    private void checkRouteReturns(AppModel m) {
+        for (RouteSignature route : m.getRouteSignatures().values()) {
+            FunctionDefStmt fn = m.getFunctions().get(route.getEndpoint());
+            if (fn == null) continue;
+            if (!allPathsReturn(fn.getBody())) {
+                reporter.error(DiagnosticKind.SEMANTIC, "PY011",
+                        "Route handler '" + route.getEndpoint() + "()' may finish without returning a response",
+                        file, fn.getLineNumber(), fn.getColumnNumber(),
+                        "ensure every execution path ends with return");
+            }
+        }
+    }
+
+    private boolean allPathsReturn(Suite suite) {
+        if (suite == null) return false;
+        return suiteAllPathsReturn(suite);
+    }
+
+    private boolean suiteAllPathsReturn(Suite suite) {
+        List<ASTNode> stmts = suite.getChildren();
+        for (int i = 0; i < stmts.size(); i++) {
+            ASTNode stmt = stmts.get(i);
+            if (stmt instanceof ReturnStmt) return true;
+            if (stmt instanceof IfStmt ifs) {
+                boolean thenOk = allPathsReturn(ifs.getThenSuite());
+                if (ifs.getElseSuite() != null) {
+                    if (thenOk && allPathsReturn(ifs.getElseSuite())) return true;
+                } else if (thenOk && i == stmts.size() - 1) {
+                    return false; // if-return without else at end — fall-through path
+                }
+            }
+        }
+        return false;
+    }
+
     // ---- statement checking -----------------------------------------------
 
     private void checkStmt(ASTNode stmt) {
@@ -194,8 +267,8 @@ public final class PythonSemanticAnalyzer {
             }
         } else if (stmt instanceof ForStmt fs) {
             checkExpr(fs.getIterable());
-            // The loop variable is bound in the enclosing (function/global) scope.
             currentScope().add(fs.getIterator().getName());
+            markAssigned(fs.getIterator().getName());
             loopDepth++;
             checkSuite(fs.getBody());
             loopDepth--;
@@ -215,15 +288,13 @@ public final class PythonSemanticAnalyzer {
         } else if (stmt instanceof ExpressionStmt es) {
             checkExpr(es.getExpression());
         } else if (stmt instanceof ClassDefStmt) {
-            // Class bodies are out of scope for this Python subset's checks.
+            // out of scope
         } else if (stmt instanceof Suite s) {
             checkSuite(s);
         }
-        // pass/global/del/import: nothing to resolve here
     }
 
     private void checkFunction(FunctionDefStmt fn) {
-        // PY003 duplicate parameter names
         Set<String> seen = new HashSet<>();
         Set<String> params = new LinkedHashSet<>();
         if (fn.getParameters() != null) {
@@ -238,16 +309,26 @@ public final class PythonSemanticAnalyzer {
             }
         }
 
+        Set<String> locals = new LinkedHashSet<>(params);
+        collectAssignmentTargets(fn.getBody(), locals);
+
+        Set<String> savedLocals = functionLocals;
+        Set<String> savedAssigned = assignedLocals;
+        functionLocals = locals;
+        assignedLocals = new HashSet<>(params);
+
         Set<String> localScope = new LinkedHashSet<>(params);
-        collectBoundNames(fn.getBody(), localScope);
         scopes.push(localScope);
         int savedLoop = loopDepth;
-        loopDepth = 0;           // loops don't cross the function boundary
+        loopDepth = 0;
         functionDepth++;
         checkSuite(fn.getBody());
         functionDepth--;
         loopDepth = savedLoop;
         scopes.pop();
+
+        functionLocals = savedLocals;
+        assignedLocals = savedAssigned;
     }
 
     private void checkChildrenExprAndSuites(ASTNode node, boolean isLoop) {
@@ -272,11 +353,16 @@ public final class PythonSemanticAnalyzer {
     private void checkAssignTarget(Expression target) {
         if (target instanceof IdentifierExpr id) {
             currentScope().add(id.getName());
+            markAssigned(id.getName());
         } else if (target instanceof AttributeExpr a) {
             checkExpr(a.getBase());
         } else if (target instanceof IndexExpr ix) {
             for (ASTNode c : ix.getChildren()) if (c instanceof Expression e) checkExpr(e);
         }
+    }
+
+    private void markAssigned(String name) {
+        if (functionDepth > 0) assignedLocals.add(name);
     }
 
     // ---- expression checking ----------------------------------------------
@@ -285,12 +371,7 @@ public final class PythonSemanticAnalyzer {
         if (expr == null) return;
 
         if (expr instanceof IdentifierExpr id) {
-            if (!isDefined(id.getName())) {
-                reporter.error(DiagnosticKind.SEMANTIC, "PY001",
-                        "Undefined variable '" + id.getName() + "'",
-                        file, id.getLineNumber(), id.getColumnNumber(),
-                        "define '" + id.getName() + "' before using it");
-            }
+            resolveIdentifier(id);
         } else if (expr instanceof CallExpr call) {
             checkCall(call);
         } else if (expr instanceof AttributeExpr a) {
@@ -302,11 +383,26 @@ public final class PythonSemanticAnalyzer {
             checkExpr(lambda.getBody());
             scopes.pop();
         } else {
-            // BinaryExpr, CompareExpr, UnaryExpr, NotExpr, IndexExpr, literals,
-            // list/set/dict literals: recurse into expression children.
             for (ASTNode c : expr.getChildren()) {
                 if (c instanceof Expression e) checkExpr(e);
             }
+        }
+    }
+
+    private void resolveIdentifier(IdentifierExpr id) {
+        String name = id.getName();
+        if (functionDepth > 0 && functionLocals.contains(name) && !assignedLocals.contains(name)) {
+            reporter.error(DiagnosticKind.SEMANTIC, "PY010",
+                    "Local variable '" + name + "' is used before assignment",
+                    file, id.getLineNumber(), id.getColumnNumber(),
+                    "assign to '" + name + "' before reading it");
+            return;
+        }
+        if (!isDefined(name)) {
+            reporter.error(DiagnosticKind.SEMANTIC, "PY001",
+                    "Undefined variable '" + name + "'",
+                    file, id.getLineNumber(), id.getColumnNumber(),
+                    "define '" + name + "' before using it");
         }
     }
 
@@ -318,16 +414,55 @@ public final class PythonSemanticAnalyzer {
                         "Call to undefined function '" + id.getName() + "'",
                         file, id.getLineNumber(), id.getColumnNumber(),
                         "define or import '" + id.getName() + "'");
+            } else {
+                checkArgumentCount(id, call);
             }
         } else {
-            // method call obj.m(...) or chained call: check the callee expression
             checkExpr(fn);
         }
         for (Expression a : call.getArguments()) checkExpr(a);
         for (Expression a : call.getKeywordArguments().values()) checkExpr(a);
     }
 
-    // ---- scope helpers -----------------------------------------------------
+    private void checkArgumentCount(IdentifierExpr callee, CallExpr call) {
+        if (activeModel == null) return;
+        FunctionSignature sig = activeModel.getFunctionSignatures().get(callee.getName());
+        if (sig == null || BUILTINS.contains(callee.getName())) return;
+
+        List<String> params = sig.getParameters();
+        int pos = call.getArguments().size();
+        Set<String> kw = call.getKeywordArguments().keySet();
+
+        if (pos > params.size()) {
+            reporter.error(DiagnosticKind.SEMANTIC, "PY008",
+                    "Call to '" + callee.getName() + "()' has too many positional arguments "
+                            + "(expected " + params.size() + ", got " + pos + ")",
+                    file, call.getLineNumber(), call.getColumnNumber(),
+                    "pass exactly " + params.size() + " argument(s)");
+            return;
+        }
+
+        for (int i = pos; i < params.size(); i++) {
+            if (!kw.contains(params.get(i))) {
+                reporter.error(DiagnosticKind.SEMANTIC, "PY008",
+                        "Call to '" + callee.getName() + "()' is missing required argument '"
+                                + params.get(i) + "'",
+                        file, call.getLineNumber(), call.getColumnNumber(),
+                        "pass " + params.get(i) + "=...");
+                return;
+            }
+        }
+
+        for (String k : kw) {
+            if (!params.contains(k)) {
+                reporter.error(DiagnosticKind.SEMANTIC, "PY008",
+                        "Call to '" + callee.getName() + "()' has unexpected keyword argument '"
+                                + k + "'",
+                        file, call.getLineNumber(), call.getColumnNumber(),
+                        "remove '" + k + "' or fix the parameter name");
+            }
+        }
+    }
 
     private Set<String> currentScope() { return scopes.peek(); }
 

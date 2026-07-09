@@ -32,6 +32,12 @@ public final class AppModel {
     private String appVariableName = "app";
     private String productsVariableName = "products";
 
+    private final Map<String, FunctionSignature> functionSignatures = new LinkedHashMap<>();
+    private final Map<String, RouteSignature> routeSignatures = new LinkedHashMap<>();
+    private final ProductSchema productSchema = new ProductSchema();
+    /** Endpoint -> form field names read via {@code request.form.get(...)}. */
+    private final Map<String, Set<String>> requestFormFieldsByEndpoint = new LinkedHashMap<>();
+
     public Set<String> getImports() { return imports; }
     public Map<String, Integer> getGlobalVars() { return globalVars; }
     public Map<String, FunctionDefStmt> getFunctions() { return functions; }
@@ -45,6 +51,21 @@ public final class AppModel {
     public void setAppVariableName(String n) { this.appVariableName = n; }
     public String getProductsVariableName() { return productsVariableName; }
     public void setProductsVariableName(String n) { this.productsVariableName = n; }
+
+    public Map<String, FunctionSignature> getFunctionSignatures() { return functionSignatures; }
+    public Map<String, RouteSignature> getRouteSignatures() { return routeSignatures; }
+    public ProductSchema getProductSchema() { return productSchema; }
+    public Map<String, Set<String>> getRequestFormFieldsByEndpoint() { return requestFormFieldsByEndpoint; }
+
+    public RouteSignature routeForEndpoint(String endpoint) {
+        return routeSignatures.get(endpoint);
+    }
+
+    public void recordRequestFormField(String endpoint, String field) {
+        requestFormFieldsByEndpoint
+                .computeIfAbsent(endpoint, k -> new LinkedHashSet<>())
+                .add(field);
+    }
 
     public boolean hasEndpoint(String name) {
         return functions.containsKey(name);

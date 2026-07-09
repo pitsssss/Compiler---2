@@ -37,12 +37,12 @@ public final class Diagnostic {
     public int getColumn() { return column; }
     public String getSuggestion() { return suggestion; }
 
-    /** Human-readable single line, e.g.
-     *  {@code [SEMANTIC/ERROR PY001] app.py:12:4 Undefined variable 'x' (hint: define it first)}. */
+    /** Human-readable multi-line report, e.g.
+     *  {@code [ERROR PY001] app.py:12:4\nUndefined variable 'x'.\nSuggestion: define 'x' before using it.} */
     @Override
     public String toString() {
         StringBuilder sb = new StringBuilder();
-        sb.append('[').append(kind).append('/').append(severity);
+        sb.append('[').append(severity);
         if (code != null) sb.append(' ').append(code);
         sb.append("] ");
         String loc = (file != null ? file : "<input>");
@@ -50,9 +50,10 @@ public final class Diagnostic {
             loc += ":" + line;
             if (column >= 0) loc += ":" + column;
         }
-        sb.append(loc).append(' ').append(message);
+        sb.append(loc).append('\n').append(message);
         if (suggestion != null && !suggestion.isEmpty()) {
-            sb.append(" (hint: ").append(suggestion).append(')');
+            sb.append("\nSuggestion: ").append(suggestion);
+            if (!suggestion.endsWith(".")) sb.append('.');
         }
         return sb.toString();
     }

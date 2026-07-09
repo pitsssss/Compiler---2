@@ -20,7 +20,11 @@ def list_products():
 def product_details():
     return render_template("product_details.html", product=products[0])
 
-@app.route("/products/add")
+@app.route("/products/add", methods=["GET", "POST"])
 def add_product():
     errors = []
+    if request.method == "POST":
+        name = request.form.get("name")
+        price_raw = request.form.get("price")
+        category = request.form.get("category")
     return render_template("add_product.html", errors=errors)

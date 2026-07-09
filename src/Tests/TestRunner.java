@@ -5,6 +5,7 @@ import AST.Program;
 import AST.literal.DictLiteralExpr;
 import AST.stmt.FunctionDefStmt;
 import SymbolTable.FlaskSymbolTable;
+import diagnostics.Diagnostic;
 import diagnostics.DiagnosticReporter;
 import generator.FlaskAppGenerator;
 import model.AppModel;
@@ -179,6 +180,47 @@ public final class TestRunner {
                         + "@app.route(\"/\")\ndef a():\n    return \"a\"\n"
                         + "@app.route(\"/\")\ndef b():\n    return \"b\"\n"), "PY007"));
 
+        test("PY008 function argument count mismatch (invalid)", () ->
+                assertCode(TestSupport.analyzePython(
+                        "def greet(name):\n    return name\ngreet()\n"), "PY008"));
+        test("PY008 boundary: correct argument count is clean", () ->
+                assertNoErrors(TestSupport.analyzePython(
+                        "def greet(name):\n    return name\ngreet(\"x\")\n")));
+
+        test("PY009 route path parameter mismatch (invalid)", () ->
+                assertCode(TestSupport.analyzePython(
+                        "from flask import Flask\napp = Flask(\"a\")\n"
+                        + "@app.route(\"/items/<item_id>\")\ndef show():\n    return \"x\"\n"), "PY009"));
+        test("PY009 valid: path param matches function param", () ->
+                assertNoCode(TestSupport.analyzePython(
+                        "from flask import Flask\napp = Flask(\"a\")\n"
+                        + "@app.route(\"/items/<item_id>\")\ndef show(item_id):\n    return str(item_id)\n"),
+                        "PY009"));
+
+        test("PY010 local used before assignment (invalid)", () ->
+                assertCode(TestSupport.analyzePython(
+                        "def f():\n    x = y\n    y = 1\n"), "PY010"));
+        test("PY010 valid: assign before use", () ->
+                assertNoCode(TestSupport.analyzePython(
+                        "def f():\n    y = 1\n    x = y\n"), "PY010"));
+
+        test("PY011 route missing return (invalid)", () ->
+                assertCode(TestSupport.analyzePython(
+                        "from flask import Flask\napp = Flask(\"a\")\n"
+                        + "@app.route(\"/\")\ndef home():\n    x = 1\n"), "PY011"));
+        test("PY011 valid: route returns on all paths", () ->
+                assertNoCode(TestSupport.analyzePython(
+                        "from flask import Flask, render_template\napp = Flask(\"a\")\n"
+                        + "@app.route(\"/\")\ndef home():\n    return render_template(\"h.html\")\n"),
+                        "PY011"));
+
+        test("PY001 line/column present on undefined variable", () -> {
+            DiagnosticReporter r = TestSupport.analyzePython("z = missing_name\n");
+            Diagnostic d = TestSupport.firstWithCode(r, "PY001");
+            assertNotNull(d, "PY001 diagnostic");
+            assertTrue(d.getLine() >= 1, "line set");
+        });
+
         test("clean Flask program has zero semantic errors", () ->
                 assertNoErrors(TestSupport.analyzePython(
                         "from flask import Flask, render_template\napp = Flask(\"a\")\n"
@@ -207,6 +249,70 @@ public final class TestRunner {
         test("TPL004 unknown Jinja filter", () ->
                 assertCode(TestSupport.analyzeTemplate(
                         "<p>{{ name | bogusfilter }}</p>", Set.of()), "TPL004"));
+
+        test("TPL002 extends not first (invalid)", () ->
+                assertCode(TestSupport.analyzeTemplate(
+                        "<p>hello</p>{% extends \"base.html\" %}", Set.of("base.html")), "TPL002"));
+        test("TPL002 valid: extends is first", () ->
+                assertNoCode(TestSupport.analyzeTemplate(
+                        "{% extends \"base.html\" %}{% block content %}x{% endblock %}",
+                        Set.of("base.html")), "TPL002"));
+
+        test("TPL005 duplicate HTML id (invalid)", () ->
+                assertCode(TestSupport.analyzeTemplate(
+                        "<div id=\"x\"></div><div id=\"x\"></div>", Set.of()), "TPL005"));
+        test("TPL005 valid: unique ids", () ->
+                assertNoCode(TestSupport.analyzeTemplate(
+                        "<div id=\"a\"></div><div id=\"b\"></div>", Set.of()), "TPL005"));
+
+        test("TPL006 unknown Jinja function (invalid)", () ->
+                assertCode(TestSupport.analyzeTemplate(
+                        "{{ mystery_fn() }}", Set.of()), "TPL006"));
+        test("TPL006 valid: url_for is known", () ->
+                assertNoCode(TestSupport.analyzeTemplate(
+                        "{{ url_for('static', filename='style.css') }}", Set.of()), "TPL006"));
+
+        test("TPL007 loop var outside scope (invalid)", () ->
+                assertCode(TestSupport.analyzeTemplate(
+                        "{% for p in products %}{% endfor %}{{ p.name }}", Set.of()), "TPL007"));
+        test("TPL007 valid: loop var used inside loop", () ->
+                assertNoCode(TestSupport.analyzeTemplate(
+                        "{% for p in products %}{{ p.name }}{% endfor %}", Set.of()), "TPL007"));
+
+        test("TPL008 missing parent template (invalid)", () ->
+                assertCode(TestSupport.analyzeTemplates(
+                        Map.of("child.html", "{% extends \"missing.html\" %}{% block content %}x{% endblock %}"),
+                        Set.of("child.html")), "TPL008"));
+        test("TPL008 valid: parent exists", () ->
+                assertNoCode(TestSupport.analyzeTemplates(
+                        Map.of("base.html", "{% block content %}{% endblock %}",
+                                "child.html", "{% extends \"base.html\" %}{% block content %}x{% endblock %}"),
+                        Set.of("base.html", "child.html")), "TPL008"));
+
+        test("TPL009 inheritance cycle (invalid)", () ->
+                assertCode(TestSupport.analyzeTemplates(
+                        Map.of("a.html", "{% extends \"b.html\" %}{% block content %}a{% endblock %}",
+                                "b.html", "{% extends \"a.html\" %}{% block content %}b{% endblock %}"),
+                        Set.of("a.html", "b.html")), "TPL009"));
+
+        test("TPL010 block not in parent (invalid)", () ->
+                assertCode(TestSupport.analyzeTemplates(
+                        Map.of("base.html", "{% block content %}{% endblock %}",
+                                "child.html", "{% extends \"base.html\" %}{% block footer %}x{% endblock %}"),
+                        Set.of("base.html", "child.html")), "TPL010"));
+        test("TPL010 valid: block declared in parent", () ->
+                assertNoCode(TestSupport.analyzeTemplates(
+                        Map.of("base.html", "{% block content %}{% endblock %}",
+                                "child.html", "{% extends \"base.html\" %}{% block content %}x{% endblock %}"),
+                        Set.of("base.html", "child.html")), "TPL010"));
+
+        test("TPL001 line verified in duplicate block diagnostic", () -> {
+            DiagnosticReporter r = TestSupport.analyzeTemplate(
+                    "{% block x %}a{% endblock %}{% block x %}b{% endblock %}", Set.of());
+            Diagnostic d = TestSupport.firstWithCode(r, "TPL001");
+            assertNotNull(d, "TPL001");
+            assertTrue(d.getLine() >= 1, "line set");
+        });
 
         test("clean template has no semantic errors", () ->
                 assertNoErrors(TestSupport.analyzeTemplate(
@@ -241,6 +347,121 @@ public final class TestRunner {
         test("X005 template accesses a product key not in the schema", () ->
                 assertCode(TestSupport.analyzeCross(appKey,
                         Map.of("list.html", "{% for p in products %}{{ p.price }}{% endfor %}")), "X005"));
+
+        test("X004 details template needs product (invalid)", () ->
+                assertCode(TestSupport.analyzeCross(
+                        "from flask import Flask, render_template\napp = Flask(\"a\")\n"
+                        + "@app.route(\"/details\")\ndef details():\n"
+                        + "    return render_template(\"details.html\")\n",
+                        Map.of("details.html",
+                                "{% extends \"base.html\" %}{% block content %}{{ product.name }}{% endblock %}",
+                                "base.html", "{% block content %}{% endblock %}")), "X004"));
+        test("X004 valid: product passed to details template", () ->
+                assertNoCode(TestSupport.analyzeCross(
+                        "from flask import Flask, render_template\napp = Flask(\"a\")\n"
+                        + "products = [{\"id\": 1, \"name\": \"x\"}]\n"
+                        + "@app.route(\"/details\")\ndef details():\n"
+                        + "    return render_template(\"details.html\", product=products[0])\n",
+                        Map.of("details.html", "{{ product.name }}")), "X004"));
+
+        test("X006 url_for missing route argument (invalid)", () ->
+                assertCode(TestSupport.analyzeCross(
+                        "from flask import Flask\napp = Flask(\"a\")\n"
+                        + "@app.route(\"/items/<item_id>\")\ndef show(item_id):\n    return \"ok\"\n",
+                        Map.of("page.html",
+                                "<a href=\"{{ url_for('show') }}\">link</a>")), "X006"));
+        test("X006 valid: required argument provided", () ->
+                assertNoCode(TestSupport.analyzeCross(
+                        "from flask import Flask\napp = Flask(\"a\")\n"
+                        + "@app.route(\"/items/<item_id>\")\ndef show(item_id):\n    return \"ok\"\n",
+                        Map.of("page.html",
+                                "<a href=\"{{ url_for('show', item_id=1) }}\">link</a>")), "X006"));
+
+        test("X007 form POST not accepted by route (invalid)", () ->
+                assertCode(TestSupport.analyzeCross(
+                        "from flask import Flask, render_template\napp = Flask(\"a\")\n"
+                        + "@app.route(\"/add\")\ndef add():\n    return render_template(\"form.html\")\n",
+                        Map.of("form.html",
+                                "<form method=\"post\" action=\"{{ url_for('add') }}\">"
+                                + "<input name=\"name\"></form>")), "X007"));
+        test("X007 valid: route accepts POST", () ->
+                assertNoCode(TestSupport.analyzeCross(
+                        "from flask import Flask, render_template\napp = Flask(\"a\")\n"
+                        + "@app.route(\"/add\", methods=[\"GET\", \"POST\"])\ndef add():\n"
+                        + "    return render_template(\"form.html\")\n",
+                        Map.of("form.html",
+                                "<form method=\"post\" action=\"{{ url_for('add') }}\">"
+                                + "<input name=\"name\"></form>")), "X007"));
+
+        test("X008 form field mismatch (invalid)", () ->
+                assertCode(TestSupport.analyzeCross(
+                        "from flask import Flask, render_template, request\napp = Flask(\"a\")\n"
+                        + "@app.route(\"/add\", methods=[\"GET\", \"POST\"])\ndef add():\n"
+                        + "    name = request.form.get(\"name\")\n"
+                        + "    return render_template(\"form.html\")\n",
+                        Map.of("form.html",
+                                "<form method=\"post\" action=\"{{ url_for('add') }}\">"
+                                + "<input name=\"title\"></form>")), "X008"));
+        test("X008 valid: form fields match backend reads", () ->
+                assertNoCode(TestSupport.analyzeCross(
+                        "from flask import Flask, render_template, request\napp = Flask(\"a\")\n"
+                        + "@app.route(\"/add\", methods=[\"GET\", \"POST\"])\ndef add():\n"
+                        + "    name = request.form.get(\"name\")\n"
+                        + "    return render_template(\"form.html\")\n",
+                        Map.of("form.html",
+                                "<form method=\"post\" action=\"{{ url_for('add') }}\">"
+                                + "<input name=\"name\"></form>")), "X008"));
+
+        test("X009 context type incompatible (invalid)", () ->
+                assertCode(TestSupport.analyzeCross(
+                        "from flask import Flask, render_template\napp = Flask(\"a\")\n"
+                        + "products = [{\"id\": 1, \"name\": \"x\"}]\n"
+                        + "@app.route(\"/\")\ndef home():\n"
+                        + "    return render_template(\"p.html\", products=products)\n",
+                        Map.of("p.html", "{{ products.upper }}")), "X009"));
+        test("X009 valid: string context uses string method", () ->
+                assertNoCode(TestSupport.analyzeCross(
+                        "from flask import Flask, render_template\napp = Flask(\"a\")\n"
+                        + "@app.route(\"/\")\ndef home():\n"
+                        + "    return render_template(\"p.html\", title=\"hello\")\n",
+                        Map.of("p.html", "{{ title.upper }}")), "X009"));
+
+        test("X010 inconsistent product schemas (invalid)", () ->
+                assertCode(TestSupport.analyzeCross(
+                        "from flask import Flask, render_template\napp = Flask(\"a\")\n"
+                        + "products = [{\"id\": 1, \"name\": \"a\"}, {\"id\": 2, \"price\": 9}]\n"
+                        + "@app.route(\"/\")\ndef home():\n"
+                        + "    return render_template(\"p.html\", products=products)\n",
+                        Map.of("p.html", "{% for p in products %}{{ p.name }}{% endfor %}")), "X010"));
+
+        test("X011 inconsistent product field types (invalid)", () ->
+                assertCode(TestSupport.analyzeCross(
+                        "from flask import Flask, render_template\napp = Flask(\"a\")\n"
+                        + "products = [{\"id\": 1, \"price\": 10}, {\"id\": 2, \"price\": \"free\"}]\n"
+                        + "@app.route(\"/\")\ndef home():\n"
+                        + "    return render_template(\"p.html\", products=products)\n",
+                        Map.of("p.html", "{% for p in products %}{{ p.price }}{% endfor %}")), "X011"));
+
+        test("X006 diagnostic includes template file and line", () -> {
+            DiagnosticReporter r = TestSupport.analyzeCross(
+                    "from flask import Flask\napp = Flask(\"a\")\n"
+                    + "@app.route(\"/items/<item_id>\")\ndef show(item_id):\n    return \"ok\"\n",
+                    Map.of("page.html", "<a href=\"{{ url_for('show') }}\">x</a>"));
+            Diagnostic d = TestSupport.firstWithCode(r, "X006");
+            assertNotNull(d, "X006");
+            assertEquals("page.html", d.getFile(), "template file");
+            assertTrue(d.getLine() >= 1, "line set");
+        });
+
+        test("multiple cross errors in one run", () -> {
+            DiagnosticReporter r = TestSupport.analyzeCross(
+                    "from flask import Flask, render_template\napp = Flask(\"a\")\n"
+                    + "products = [{\"id\": 1}]\n"
+                    + "@app.route(\"/\")\ndef home():\n"
+                    + "    return render_template(\"p.html\")\n",
+                    Map.of("p.html", "{{ missing_var }}"));
+            assertTrue(TestSupport.hasCode(r, "X003"), "X003");
+        });
 
         String appOk =
                 "from flask import Flask, render_template\napp = Flask(\"a\")\n"
@@ -324,6 +545,12 @@ public final class TestRunner {
     private static void assertCode(DiagnosticReporter r, String code) {
         if (!TestSupport.hasCode(r, code)) {
             throw new AssertionError("expected diagnostic " + code + " but got " + r.all());
+        }
+    }
+
+    private static void assertNoCode(DiagnosticReporter r, String code) {
+        if (TestSupport.hasCode(r, code)) {
+            throw new AssertionError("did not expect " + code + " but got " + r.all());
         }
     }
 

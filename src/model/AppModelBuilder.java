@@ -9,8 +9,10 @@ import AST.stmt.*;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Walks the Python/Flask AST and produces an {@link AppModel}. Everything is
@@ -30,8 +32,7 @@ public final class AppModelBuilder {
         for (ASTNode stmt : program.getChildren()) {
             handleTopLevel(stmt, model);
         }
-        // Second pass: find render_template / url_for anywhere, tracking the
-        // enclosing endpoint.
+        // Second pass: find render_template / url_for / request.form anywhere.
         collectCalls(program, null, model);
         return model;
     }
@@ -46,8 +47,14 @@ public final class AppModelBuilder {
         } else if (stmt instanceof DecoratedStmt dec) {
             handleDecorated(dec, model);
         } else if (stmt instanceof FunctionDefStmt fn) {
-            model.getFunctions().put(fn.getName(), fn);
+            registerFunction(fn, model);
         }
+    }
+
+    private void registerFunction(FunctionDefStmt fn, AppModel model) {
+        model.getFunctions().put(fn.getName(), fn);
+        model.getFunctionSignatures().put(fn.getName(),
+                new FunctionSignature(fn.getName(), fn.getParameters(), fn.getLineNumber()));
     }
 
     private void handleGlobalAssignment(AssignmentStmt asg, AppModel model) {
@@ -70,11 +77,15 @@ public final class AppModelBuilder {
         String endpoint = null;
         if (dec.getTarget() instanceof FunctionDefStmt fn) {
             endpoint = fn.getName();
-            model.getFunctions().put(fn.getName(), fn);
+            registerFunction(fn, model);
         }
         for (Decorator d : dec.getDecorators()) {
             RouteInfo route = tryRoute(d, endpoint);
-            if (route != null) model.getRoutes().add(route);
+            if (route != null) {
+                model.getRoutes().add(route);
+                model.getRouteSignatures().put(endpoint,
+                        new RouteSignature(endpoint, route.getPath(), route.getMethods(), route.getLine()));
+            }
         }
     }
 
@@ -98,7 +109,7 @@ public final class AppModelBuilder {
         return new RouteInfo(path, methods, endpoint, d.getLineNumber());
     }
 
-    // ---- render_template / url_for discovery ------------------------------
+    // ---- render_template / url_for / request.form discovery ---------------
 
     private void collectCalls(ASTNode node, String currentFn, AppModel model) {
         if (node == null) return;
@@ -107,12 +118,23 @@ public final class AppModelBuilder {
             currentFn = fn.getName();
         }
 
-        if (node instanceof CallExpr call && call.getFunction() instanceof IdentifierExpr fid) {
-            if (fid.getName().equals("render_template")) {
-                model.getRenderCalls().add(buildRenderCall(call, currentFn));
-            } else if (fid.getName().equals("url_for")) {
-                String ep = firstStringArg(call);
-                if (ep != null) model.getUrlForRefs().add(new UrlForRef(ep, call.getLineNumber()));
+        if (node instanceof CallExpr call) {
+            if (call.getFunction() instanceof IdentifierExpr fid) {
+                if (fid.getName().equals("render_template")) {
+                    model.getRenderCalls().add(buildRenderCall(call, currentFn));
+                } else if (fid.getName().equals("url_for")) {
+                    String ep = firstStringArg(call);
+                    if (ep != null) {
+                        model.getUrlForRefs().add(new UrlForRef(
+                                ep, call.getLineNumber(), call.getColumnNumber(), null,
+                                new LinkedHashSet<>(call.getKeywordArguments().keySet())));
+                    }
+                }
+            } else {
+                String formField = tryRequestFormGet(call);
+                if (formField != null && currentFn != null) {
+                    model.recordRequestFormField(currentFn, formField);
+                }
             }
         }
 
@@ -121,27 +143,39 @@ public final class AppModelBuilder {
         }
     }
 
+    /** Recognises {@code request.form.get("field")}. */
+    private String tryRequestFormGet(CallExpr call) {
+        if (!(call.getFunction() instanceof AttributeExpr attr)) return null;
+        if (!attr.getAttribute().equals("get")) return null;
+        Expression base = attr.getBase();
+        if (!(base instanceof AttributeExpr formAttr)) return null;
+        if (!formAttr.getAttribute().equals("form")) return null;
+        if (!(formAttr.getBase() instanceof IdentifierExpr req) || !req.getName().equals("request")) {
+            return null;
+        }
+        for (Expression a : call.getArguments()) {
+            if (a instanceof StringLiteralExpr s) return s.getUnquoted();
+        }
+        return null;
+    }
+
     private RenderCall buildRenderCall(CallExpr call, String currentFn) {
         String template = firstStringArg(call);
         List<String> ctx = new ArrayList<>();
 
-        // Positional args after the template name: capture identifier names.
         List<Expression> pos = call.getArguments();
         for (int i = 1; i < pos.size(); i++) {
             String n = contextNameOf(pos.get(i));
             if (n != null) ctx.add(n);
         }
-        // Keyword args: the KEY is the context name seen inside the template.
         ctx.addAll(call.getKeywordArguments().keySet());
 
         return new RenderCall(template, ctx, currentFn, call.getLineNumber());
     }
 
-    /** Best-effort context variable name for a render argument. */
     private String contextNameOf(Expression e) {
         if (e instanceof IdentifierExpr id) return id.getName();
         if (e instanceof IndexExpr ix) {
-            // products[index] -> the collection name (used as a hint)
             return contextNameOf(baseOf(ix));
         }
         if (e instanceof AttributeExpr a) return a.getAttribute();
@@ -168,23 +202,30 @@ public final class AppModelBuilder {
         for (Expression element : list.getElements()) {
             if (element instanceof ListLiteralExpr row) {
                 Map<String, Object> record = new LinkedHashMap<>();
+                Map<String, ValueType> rowTypes = new LinkedHashMap<>();
                 List<Expression> cells = row.getElements();
                 for (int i = 0; i < cells.size(); i++) {
                     String field = (i < POSITIONAL_FIELDS.size())
                             ? POSITIONAL_FIELDS.get(i) : ("field" + i);
                     record.put(field, literalValue(cells.get(i)));
+                    rowTypes.put(field, literalType(cells.get(i)));
                     addField(model, field);
                 }
                 model.getProductRows().add(record);
+                model.getProductSchema().recordRow(rowTypes);
             } else if (element instanceof DictLiteralExpr drow) {
                 Map<String, Object> record = new LinkedHashMap<>();
+                Map<String, ValueType> rowTypes = new LinkedHashMap<>();
                 for (int i = 0; i < drow.getKeys().size(); i++) {
                     Object key = literalValue(drow.getKeys().get(i));
                     String field = String.valueOf(key);
-                    record.put(field, literalValue(drow.getValues().get(i)));
+                    Expression valExpr = drow.getValues().get(i);
+                    record.put(field, literalValue(valExpr));
+                    rowTypes.put(field, literalType(valExpr));
                     addField(model, field);
                 }
                 model.getProductRows().add(record);
+                model.getProductSchema().recordRow(rowTypes);
             }
         }
     }
@@ -193,7 +234,16 @@ public final class AppModelBuilder {
         if (!model.getProductFields().contains(field)) model.getProductFields().add(field);
     }
 
-    /** Converts a literal expression into a Java value (String/Integer/Double/Boolean/null). */
+    private ValueType literalType(Expression e) {
+        if (e instanceof StringLiteralExpr) return ValueType.STRING;
+        if (e instanceof BooleanLiteralExpr) return ValueType.BOOLEAN;
+        if (e instanceof NoneLiteralExpr) return ValueType.NONE;
+        if (e instanceof NumberLiteralExpr) return ValueType.NUMBER;
+        if (e instanceof ListLiteralExpr) return ValueType.LIST;
+        if (e instanceof DictLiteralExpr) return ValueType.DICT;
+        return ValueType.UNKNOWN;
+    }
+
     private Object literalValue(Expression e) {
         if (e instanceof StringLiteralExpr s) return s.getUnquoted();
         if (e instanceof BooleanLiteralExpr b) return b.getValue();
@@ -210,7 +260,6 @@ public final class AppModelBuilder {
             }
         }
         if (e instanceof UnaryExpr u) {
-            // handle simple negative numbers like -5
             for (ASTNode c : u.getChildren()) {
                 if (c instanceof Expression inner) {
                     Object v = literalValue(inner);

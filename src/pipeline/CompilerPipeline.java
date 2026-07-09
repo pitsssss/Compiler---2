@@ -178,6 +178,9 @@ public final class CompilerPipeline {
                 ASTPrinter.print("TEMPLATE AST: " + e.getKey(), e.getValue());
             }
         }
+        // Third pass: inheritance graph (extends / blocks).
+        new TemplateSemanticAnalyzer(reporter, "templates", knownNames)
+                .analyzeInheritance(templateAsts);
     }
 
     private ASTNode parseTemplate(Path f) throws IOException {
