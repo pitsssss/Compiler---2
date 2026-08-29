@@ -3,6 +3,9 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $projectRoot
 
+# Current host executable (powershell.exe or pwsh), not a hardcoded name on PATH.
+$powerShellExe = (Get-Process -Id $PID).Path
+
 $startTime = Get-Date
 
 function Write-Step {
@@ -26,7 +29,7 @@ function Invoke-ProjectScript {
 
     Write-Host "Running: $ScriptPath $($ScriptArguments -join ' ')"
 
-    & powershell.exe `
+    & $powerShellExe `
         -NoProfile `
         -ExecutionPolicy Bypass `
         -File $ScriptPath `
